@@ -25,6 +25,7 @@ import argparse
 import logging
 import sys
 import time
+import traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -47,6 +48,51 @@ SOURCES = {
     "wasde_pdf": ("collector.m2_reports.wasde_pdf", "WASDE PDF archive", "monthly"),
     "wwcb_images": ("collector.m3_images.wwcb_images", "WWCB image extraction", "weekly"),
 }
+
+log = logging.getLogger("collector")
+
+
+def run_source(
+    source_key: str,
+    since: int = 2010,
+    force: bool = False,
+) -> dict:
+    """Run a single collection source programmatically.
+
+    Returns a dict with keys: source, status ('ok'|'failed'|'stale'), error.
+    Used by the API (T4) to trigger collection without CLI.
+    """
+    if source_key not in SOURCES:
+        return {"source": source_key, "status": "failed", "error": f"Unknown source: {source_key}"}
+
+    ensure_dirs()
+    module_path, label, _schedule = SOURCES[source_key]
+    log.info("─── %s (%s) ───", source_key.upper(), label)
+
+    try:
+        mod = __import__(module_path, fromlist=["collect"])
+        mod.collect(since=since, force=force)
+        manifest.record_success(source_key)
+        return {"source": source_key, "status": "ok", "error": None}
+    except Exception as exc:
+        error_msg = traceback.format_exc()
+        log.exception("FAILED: %s", source_key)
+        result_status = manifest.record_failure(source_key, str(exc))
+        return {"source": source_key, "status": result_status, "error": error_msg}
+
+
+def _resolve_targets(source_arg: str) -> list[str]:
+    if source_arg == "all":
+        return list(SOURCES.keys())
+    if source_arg == "structured":
+        return ["gtr", "quickstats", "wasde", "psd", "ers_feedgrains", "export_sales"]
+    if source_arg == "reports":
+        return ["wwcb", "wasde_pdf"]
+    if source_arg == "weekly":
+        return [k for k, v in SOURCES.items() if v[2] == "weekly"]
+    if source_arg == "monthly":
+        return [k for k, v in SOURCES.items() if v[2] == "monthly"]
+    return [source_arg]
 
 
 def main() -> None:
@@ -77,6 +123,11 @@ def main() -> None:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Also retry sources in 'failed' status",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -84,22 +135,17 @@ def main() -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    log = logging.getLogger("collector")
 
     ensure_dirs()
 
-    if args.source == "all":
-        targets = list(SOURCES.keys())
-    elif args.source == "structured":
-        targets = ["gtr", "quickstats", "wasde", "psd", "ers_feedgrains", "export_sales"]
-    elif args.source == "reports":
-        targets = ["wwcb", "wasde_pdf"]
-    elif args.source == "weekly":
-        targets = [k for k, v in SOURCES.items() if v[2] == "weekly"]
-    elif args.source == "monthly":
-        targets = [k for k, v in SOURCES.items() if v[2] == "monthly"]
-    else:
-        targets = [args.source]
+    targets = _resolve_targets(args.source)
+
+    if args.retry_failed:
+        failed = manifest.get_failed_sources()
+        for s in failed:
+            if s not in targets:
+                targets.append(s)
+                log.info("Adding failed source for retry: %s", s)
 
     log.info(
         "Starting collection: sources=%s, since=%d, force=%s",
@@ -109,24 +155,17 @@ def main() -> None:
     results: dict[str, str] = {}
 
     for source_key in targets:
-        module_path, label, _schedule = SOURCES[source_key]
-        log.info("─── %s (%s) ───", source_key.upper(), label)
-        try:
-            mod = __import__(module_path, fromlist=["collect"])
-            mod.collect(since=args.since, force=args.force)
-            results[source_key] = "ok"
-        except Exception:
-            log.exception("FAILED: %s", source_key)
-            results[source_key] = "failed"
+        result = run_source(source_key, since=args.since, force=args.force)
+        results[source_key] = result["status"]
 
     manifest.flush()
     elapsed = time.time() - t0
     log.info("═══ Collection finished in %.1fs ═══", elapsed)
     for k, v in results.items():
         status = "✓" if v == "ok" else "✗"
-        log.info("  %s %s", status, k)
+        log.info("  %s %s (%s)", status, k, v)
 
-    if any(v == "failed" for v in results.values()):
+    if any(v != "ok" for v in results.values()):
         sys.exit(1)
 
 
