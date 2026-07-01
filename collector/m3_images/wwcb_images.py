@@ -1,9 +1,12 @@
-"""WWCB image extractor – extract satellite/weather/crop images from PDF.
+"""WWCB image extractor — 4-stage filtering pipeline.
+
+Stage 1: Rule-based filter (size, aspect ratio, page position, keywords)
+Stage 2: Perceptual hash blocklist (imagehash)
+Stage 3: Tesseract OCR classification (satellite, weather_map, chart, unknown)
+Stage 4: Manual curation via curation.json
 
 Uses PyMuPDF to extract embedded images from Weekly Weather and Crop
-Bulletin PDFs. Classifies images by size heuristic, extracts the
-accompanying narrative text from each page, and stores images as
-PNG files with a JSON metadata sidecar.
+Bulletin PDFs. Stores images as PNG files with JSON metadata sidecars.
 """
 
 from __future__ import annotations
@@ -17,35 +20,25 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 from common import manifest
-from common.storage import ASSETS_DIR, RAW_DIR, ensure_dirs, sha256_file
+from common.data_access import get_backend
+from common.storage import sha256_file
+
+from collector.m3_images.image_filter import (
+    FilterResult,
+    HashFilter,
+    RuleFilter,
+    apply_filters,
+    init_curation,
+)
+from collector.m3_images.ocr_classifier import (
+    classify_by_ocr,
+    extract_ocr_text,
+    extract_section_header,
+)
 
 log = logging.getLogger(__name__)
 
 SOURCE = "USDA_WWCB_IMAGES"
-
-MIN_WIDTH = 150
-MIN_HEIGHT = 150
-MIN_FILE_KB = 10
-
-IMAGE_CATEGORIES = {
-    "map": {"min_area": 250_000, "max_aspect": 2.5},
-    "chart": {"min_area": 40_000, "min_aspect": 1.8},
-    "thumbnail": {"min_area": 5_000, "max_area": 250_000},
-}
-
-
-def _classify_image(width: int, height: int, page_num: int, total_pages: int) -> str:
-    area = width * height
-    aspect = max(width, height) / max(min(width, height), 1)
-
-    if area >= IMAGE_CATEGORIES["map"]["min_area"] and aspect <= IMAGE_CATEGORIES["map"]["max_aspect"]:
-        return "map"
-    if area >= IMAGE_CATEGORIES["chart"]["min_area"] and aspect >= IMAGE_CATEGORIES["chart"]["min_aspect"]:
-        return "chart"
-    if area >= IMAGE_CATEGORIES["thumbnail"]["min_area"]:
-        return "thumbnail"
-    return "icon"
-
 
 _HEADER_RE = re.compile(
     r"^\s*\d+\s*$|"
@@ -61,6 +54,12 @@ REGION_KEYWORDS = [
     "SOUTHEAST ASIA", "FORMER SOVIET UNION", "CHINA", "CANADA", "MEXICO",
 ]
 
+# USER-CONFIG: minimum narrative text length for page text extraction
+MIN_NARRATIVE_CHARS = 100
+
+# USER-CONFIG: number of adjacent pages to search for narrative text
+SEARCH_WINDOW = 2
+
 
 def _extract_page_text(page) -> str:
     raw = page.get_text("text")
@@ -74,11 +73,6 @@ def _extract_page_text(page) -> str:
             continue
         cleaned.append(stripped)
     return "\n".join(cleaned)
-
-
-MIN_NARRATIVE_CHARS = 100
-
-SEARCH_WINDOW = 2
 
 
 def _detect_region(text: str) -> str | None:
@@ -97,10 +91,6 @@ def _has_narrative(text: str) -> bool:
 
 
 def _find_best_text(page_texts: list[str], page_idx: int) -> tuple[str, str | None, list[int]]:
-    """Search current page and adjacent pages for narrative text.
-
-    Returns (combined_text, region, source_pages).
-    """
     current = page_texts[page_idx]
     if _has_narrative(current):
         return current, _detect_region(current), [page_idx]
@@ -127,17 +117,7 @@ def _find_best_text(page_texts: list[str], page_idx: int) -> tuple[str, str | No
     return combined, region, sorted(set(source_pages))
 
 
-def _images_dir() -> Path:
-    return ASSETS_DIR / "wwcb" / "images"
-
-
-def _metadata_dir() -> Path:
-    return ASSETS_DIR / "wwcb" / "metadata"
-
-
 def _parse_date_from_filename(filename: str) -> str | None:
-    """Extract date from WWCB filename like wwcb_20260630.pdf or wwcb_current_20260630.pdf."""
-    import re
     m = re.search(r"(\d{8})", filename)
     if m:
         try:
@@ -148,12 +128,17 @@ def _parse_date_from_filename(filename: str) -> str | None:
 
 
 def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
-    """Extract all meaningful images from a single WWCB PDF.
+    """Extract all meaningful images from a single WWCB PDF through the 4-stage pipeline."""
+    backend = get_backend()
+    data_dir = Path(backend.resolve_path(""))
 
-    Returns a list of metadata dicts for each extracted image.
-    """
-    images_dir = _images_dir()
-    images_dir.mkdir(parents=True, exist_ok=True)
+    images_rel = "assets/wwcb/images"
+    metadata_rel = "assets/wwcb/metadata"
+    backend.ensure_dir(images_rel)
+    backend.ensure_dir(metadata_rel)
+
+    curation = init_curation(data_dir)
+    images_dir = Path(backend.resolve_path(images_rel))
 
     pdf_date = _parse_date_from_filename(pdf_path.name) or "unknown"
     pdf_stem = pdf_path.stem
@@ -161,6 +146,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
     doc = fitz.open(str(pdf_path))
     total_pages = len(doc)
     extracted = []
+    filtered_out = []
     seen_xrefs = set()
 
     page_texts = [_extract_page_text(doc[i]) for i in range(total_pages)]
@@ -173,6 +159,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
             continue
 
         best_text, page_region, text_sources = _find_best_text(page_texts, page_num)
+        section_header = extract_section_header(page_texts[page_num])
 
         for img_idx, img_info in enumerate(image_list):
             xref = img_info[0]
@@ -183,7 +170,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
             try:
                 base_image = doc.extract_image(xref)
             except Exception:
-                log.debug("WWCB_IMG: failed to extract xref %d from %s", xref, pdf_path.name)
+                log.debug("Failed to extract xref %d from %s", xref, pdf_path.name)
                 continue
 
             if not base_image or not base_image.get("image"):
@@ -192,34 +179,44 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
             width = base_image.get("width", 0)
             height = base_image.get("height", 0)
 
-            if width < MIN_WIDTH or height < MIN_HEIGHT:
-                continue
-
-            file_size_kb = len(base_image["image"]) / 1024
-            if file_size_kb < MIN_FILE_KB:
-                log.debug("WWCB_IMG: skipping xref %d (%.1fKB < %dKB min)", xref, file_size_kb, MIN_FILE_KB)
-                continue
-
             ext = base_image.get("ext", "png")
             if ext not in ("png", "jpeg", "jpg"):
                 ext = "png"
 
-            category = _classify_image(width, height, page_num, total_pages)
-            if category == "icon":
-                continue
-
             img_filename = f"{pdf_stem}_p{page_num+1:03d}_x{xref}.{ext}"
             img_path = images_dir / img_filename
 
-            if img_path.exists() and not force:
-                meta = _load_existing_meta(img_path)
-                if meta:
-                    extracted.append(meta)
-                    continue
+            pre_filter_meta = {
+                "filename": img_filename,
+                "width": width,
+                "height": height,
+                "file_size_kb": round(len(base_image["image"]) / 1024, 1),
+                "page": page_num + 1,
+                "page_text": best_text,
+            }
 
-            img_path.write_bytes(base_image["image"])
+            filter_result = apply_filters(img_path if img_path.exists() else pdf_path, pre_filter_meta, data_dir)
+
+            if not filter_result.keep:
+                filtered_out.append({
+                    "filename": img_filename,
+                    "filter_stage": filter_result.stage,
+                    "filter_reason": filter_result.reason,
+                })
+                log.debug("Filtered: %s — %s (%s)", img_filename, filter_result.reason, filter_result.stage)
+                continue
+
+            if not img_path.exists() or force:
+                img_path.write_bytes(base_image["image"])
+
+            ocr_text = extract_ocr_text(img_path)
+            ocr_category = classify_by_ocr(ocr_text)
+
+            hash_filter = HashFilter(curation.get("blocklist_hashes", []))
+            img_hash = hash_filter.compute_hash(img_path)
 
             meta = {
+                "id": img_path.stem,
                 "filename": img_filename,
                 "path": str(img_path),
                 "source_pdf": pdf_path.name,
@@ -231,38 +228,52 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
                 "height": height,
                 "area": width * height,
                 "aspect_ratio": round(max(width, height) / max(min(width, height), 1), 2),
-                "category": category,
+                "category": ocr_category if ocr_category != "unknown" else _classify_by_size(width, height),
                 "format": ext,
                 "file_size_kb": round(len(base_image["image"]) / 1024, 1),
                 "region": page_region,
                 "page_text": best_text,
+                "ocr_text": ocr_text,
+                "section_header": section_header,
                 "text_source_pages": [p + 1 for p in text_sources],
+                "filter_stage": filter_result.stage,
+                "filter_reason": filter_result.reason,
+                "phash": img_hash,
                 "extracted_at": datetime.utcnow().isoformat(),
             }
             extracted.append(meta)
             log.debug(
-                "WWCB_IMG: %s → %s (%dx%d, %s, %.1fKB)",
+                "%s → %s (%dx%d, %s, %.1fKB, ocr=%s)",
                 pdf_path.name, img_filename, width, height,
-                category, meta["file_size_kb"],
+                meta["category"], meta["file_size_kb"], ocr_category,
             )
 
     doc.close()
+
+    if filtered_out:
+        log.info(
+            "%s: %d extracted, %d filtered out",
+            pdf_path.name, len(extracted), len(filtered_out),
+        )
+
     return extracted
 
 
-def _load_existing_meta(img_path: Path) -> dict | None:
-    meta_path = _metadata_dir() / (img_path.stem + ".json")
-    if meta_path.exists():
-        try:
-            return json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return None
+def _classify_by_size(width: int, height: int) -> str:
+    area = width * height
+    aspect = max(width, height) / max(min(width, height), 1)
+    if area >= 250_000 and aspect <= 2.5:
+        return "map"
+    if area >= 40_000 and aspect >= 1.8:
+        return "chart"
+    if area >= 5_000:
+        return "thumbnail"
+    return "icon"
 
 
 def _save_metadata(all_meta: list[dict], pdf_name: str) -> Path:
-    """Save per-PDF metadata as a JSON file."""
-    meta_dir = _metadata_dir()
+    backend = get_backend()
+    meta_dir = Path(backend.resolve_path("assets/wwcb/metadata"))
     meta_dir.mkdir(parents=True, exist_ok=True)
 
     stem = Path(pdf_name).stem
@@ -275,8 +286,8 @@ def _save_metadata(all_meta: list[dict], pdf_name: str) -> Path:
 
 
 def _save_summary(all_results: dict[str, list[dict]]) -> Path:
-    """Save a combined summary across all PDFs."""
-    meta_dir = _metadata_dir()
+    backend = get_backend()
+    meta_dir = Path(backend.resolve_path("assets/wwcb/metadata"))
     meta_dir.mkdir(parents=True, exist_ok=True)
 
     summary = {
@@ -312,20 +323,20 @@ def _save_summary(all_results: dict[str, list[dict]]) -> Path:
 
 
 def collect(since: int = 2010, force: bool = False) -> None:
-    """Extract images from all downloaded WWCB PDFs."""
-    ensure_dirs()
-    raw_dir = RAW_DIR / "wwcb"
+    """Extract images from all downloaded WWCB PDFs through the 4-stage pipeline."""
+    backend = get_backend()
+    raw_dir = Path(backend.resolve_path("raw/wwcb"))
 
     if not raw_dir.exists():
-        log.warning("WWCB_IMG: no raw PDFs found — run wwcb collector first")
+        log.warning("No raw PDFs found — run wwcb collector first")
         return
 
     pdf_files = sorted(raw_dir.glob("*.pdf"))
     if not pdf_files:
-        log.warning("WWCB_IMG: no PDF files in %s", raw_dir)
+        log.warning("No PDF files in %s", raw_dir)
         return
 
-    log.info("WWCB_IMG: found %d PDFs to process", len(pdf_files))
+    log.info("Found %d PDFs to process", len(pdf_files))
 
     all_results: dict[str, list[dict]] = {}
     total_extracted = 0
@@ -337,24 +348,24 @@ def collect(since: int = 2010, force: bool = False) -> None:
                 _save_metadata(images, pdf_path.name)
                 all_results[pdf_path.name] = images
                 total_extracted += len(images)
-                log.info("WWCB_IMG: %s → %d images", pdf_path.name, len(images))
+                log.info("%s → %d images", pdf_path.name, len(images))
             else:
-                log.info("WWCB_IMG: %s → no extractable images", pdf_path.name)
+                log.info("%s → no extractable images", pdf_path.name)
         except Exception:
-            log.exception("WWCB_IMG: failed to process %s", pdf_path.name)
+            log.exception("Failed to process %s", pdf_path.name)
 
     if all_results:
         summary_path = _save_summary(all_results)
         manifest.upsert(
             source=SOURCE,
             artifact_type="image_metadata",
-            period=f"summary",
+            period="summary",
             path=summary_path,
             sha256=sha256_file(summary_path),
         )
         log.info(
-            "WWCB_IMG: extracted %d images from %d PDFs → %s",
+            "Extracted %d images from %d PDFs → %s",
             total_extracted, len(all_results), summary_path,
         )
     else:
-        log.warning("WWCB_IMG: no images extracted from any PDF")
+        log.warning("No images extracted from any PDF")
