@@ -1,13 +1,35 @@
-"""Path management for raw / normalized / assets layers."""
+"""Path management for raw / normalized / assets layers.
+
+Delegates base directory resolution to DataBackend. Direct path constants
+(RAW_DIR, etc.) are preserved for backward compatibility with existing
+collectors but resolve through the abstraction layer.
+"""
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+from common.data_access import get_backend, LocalBackend
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _base_dir() -> Path:
+    backend = get_backend()
+    if isinstance(backend, LocalBackend):
+        return backend.base_dir
+    return _PROJECT_ROOT / "data"
+
+
+def _lazy_dir(subpath: str) -> Path:
+    return _base_dir() / subpath
+
+
+# Keep module-level constants for backward compatibility.
+# Collectors that import these directly will still work.
+BASE_DIR = _PROJECT_ROOT
+DATA_DIR = _PROJECT_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 NORM_DIR = DATA_DIR / "normalized"
 ASSETS_DIR = DATA_DIR / "assets"
@@ -22,32 +44,29 @@ SOURCE_DIRS: dict[str, Path] = {
     "export_sales": RAW_DIR / "export_sales",
 }
 
+# USER-CONFIG: directory structure for data layers
+_RAW_DIRS = [
+    "raw/gtr", "raw/quickstats", "raw/wasde", "raw/wwcb",
+    "raw/psd", "raw/ers_feedgrains", "raw/export_sales",
+]
+_NORM_DIRS = ["normalized/structured", "normalized/wwcb_narrative"]
+_ASSET_DIRS = [
+    "assets/wwcb", "assets/wwcb/images", "assets/wwcb/metadata", "assets/geo",
+]
+
 
 def ensure_dirs() -> None:
-    for d in [
-        RAW_DIR / "gtr",
-        RAW_DIR / "quickstats",
-        RAW_DIR / "wasde",
-        RAW_DIR / "wwcb",
-        RAW_DIR / "psd",
-        RAW_DIR / "ers_feedgrains",
-        RAW_DIR / "export_sales",
-        NORM_DIR / "structured",
-        NORM_DIR / "wwcb_narrative",
-        ASSETS_DIR / "wwcb",
-        ASSETS_DIR / "wwcb" / "images",
-        ASSETS_DIR / "wwcb" / "metadata",
-        ASSETS_DIR / "geo",
-    ]:
-        d.mkdir(parents=True, exist_ok=True)
+    backend = get_backend()
+    for d in _RAW_DIRS + _NORM_DIRS + _ASSET_DIRS:
+        backend.ensure_dir(d)
 
 
 def raw_path(source: str, filename: str) -> Path:
-    return RAW_DIR / source / filename
+    return _base_dir() / "raw" / source / filename
 
 
 def norm_path(filename: str) -> Path:
-    return NORM_DIR / "structured" / filename
+    return _base_dir() / "normalized" / "structured" / filename
 
 
 def sha256_file(path: Path) -> str:
