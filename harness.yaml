@@ -55,7 +55,6 @@ runtime_rules:
     weekly:
       - gtr
       - quickstats
-      - export_sales
       - wwcb
       - wwcb_images
     monthly:
@@ -63,3 +62,7 @@ runtime_rules:
       - psd
       - ers_feedgrains
       - wasde_pdf
+    # USER-CONFIG: FAS opendata 장애(HTTP 500, 2026-07-03)로 자동 수집 제외.
+    # 복구 확인 후 weekly로 복귀. 실제 그룹 정의는 collector/run.py SOURCES.
+    manual:
+      - export_sales

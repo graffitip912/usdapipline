@@ -15,8 +15,9 @@ Usage:
     python -m collector.run --source wwcb_images
 
 Schedule groups:
-    weekly  : gtr, quickstats, export_sales, wwcb, wwcb_images
+    weekly  : gtr, quickstats, wwcb, wwcb_images
     monthly : wasde, psd, ers_feedgrains, wasde_pdf
+    manual  : export_sales (FAS 장애로 자동 수집 제외, 2026-07-03)
 """
 
 from __future__ import annotations
@@ -45,7 +46,9 @@ SOURCES = {
     "wasde": ("collector.m1_structured.wasde", "WASDE CSV", "monthly"),
     "psd": ("collector.m1_structured.psd", "FAS PSD bulk CSV", "monthly"),
     "ers_feedgrains": ("collector.m1_structured.ers_feedgrains", "ERS Feed Grains CSV", "monthly"),
-    "export_sales": ("collector.m1_structured.export_sales", "FAS Export Sales API", "weekly"),
+    # USER-CONFIG: FAS opendata 전면 장애(HTTP 500, 2026-07-03 확인)로 주간 자동
+    # 수집에서 제외. FAS 복구 확인 후 "manual" → "weekly"로 되돌릴 것.
+    "export_sales": ("collector.m1_structured.export_sales", "FAS Export Sales API", "manual"),
     "wwcb": ("collector.m2_reports.wwcb", "WWCB PDF", "weekly"),
     "wasde_pdf": ("collector.m2_reports.wasde_pdf", "WASDE PDF archive", "monthly"),
     "wwcb_images": ("collector.m3_images.wwcb_images", "WWCB image extraction", "weekly"),

@@ -54,8 +54,9 @@ CBOT 곡물 선물 가격 예측을 위한 USDA 데이터 수집·서빙 API.
 ## 소스 (9종)
 | 실행 키 | 내용 | 주기 |
 |---|---|---|
-| gtr, quickstats, export_sales, wwcb, wwcb_images | GTR 지수 / NASS 통계 / 수출 판매 / 주간 기상·작황 PDF / 이미지 추출 | 주간 (금 06:00 UTC) |
+| gtr, quickstats, wwcb, wwcb_images | GTR 지수 / NASS 통계 / 주간 기상·작황 PDF / 이미지 추출 | 주간 (금 06:00 UTC) |
 | wasde, psd, ers_feedgrains, wasde_pdf | WASDE 수급 / FAS PSD / 사료곡물 / WASDE PDF | 월간 (15일 06:00 UTC) |
+| export_sales | FAS 수출 판매 — **FAS opendata 장애로 자동 수집 제외 (2026-07-03), 수동 실행만** | manual |
 
 - WASDE/WWCB는 www.usda.gov 장애 시 공식 ESMIS 아카이브(esmis.nal.usda.gov)로 자동 폴백
 - **Phase 1**: 인증 없음, 파일시스템 저장. Phase 2에서 JWT + S3/DB 전환 예정

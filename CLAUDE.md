@@ -62,7 +62,7 @@ USDA APIs/PDFs → collector/ (9 sources) → data/ (parquet/json/images)
 |------|--------|------|
 | GTR xlsx | weekly | m1_structured.gtr |
 | QuickStats API | weekly | m1_structured.quickstats |
-| Export Sales API | weekly | m1_structured.export_sales |
+| Export Sales API | manual (FAS 장애로 제외, 2026-07-03) | m1_structured.export_sales |
 | WWCB PDF | weekly | m2_reports.wwcb |
 | WWCB Images | weekly | m3_images.wwcb_images |
 | WASDE CSV | monthly | m1_structured.wasde |
