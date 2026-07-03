@@ -10,6 +10,7 @@ import {
   getVerificationHistory,
   getChangeRequests,
   getDataPreview,
+  resolveVerificationHistory,
   submitReview,
   createChangeRequest,
   applyChangeRequest,
@@ -27,6 +28,7 @@ const STATUS_COLORS: Record<string, string> = {
   success: "bg-green-100 text-green-800 border-green-200",
   failed: "bg-red-100 text-red-800 border-red-200",
   stale: "bg-orange-100 text-orange-800 border-orange-200",
+  skipped: "bg-violet-50 text-violet-800 border-violet-200",
   never_run: "bg-gray-100 text-gray-600 border-gray-200",
   unknown: "bg-gray-100 text-gray-600 border-gray-200",
 };
@@ -37,6 +39,7 @@ const STATUS_BADGE: Record<string, string> = {
   success: "bg-green-600 text-white",
   failed: "bg-red-600 text-white",
   stale: "bg-orange-500 text-white",
+  skipped: "bg-violet-500 text-white",
   never_run: "bg-gray-400 text-white",
   unknown: "bg-gray-400 text-white",
 };
@@ -66,6 +69,7 @@ export default function AdminPage() {
   const [previewLoading, setPreviewLoading] = useState<string | null>(null);
   // 실행 중인 수집: source -> Run 시점의 last_attempt (변하면 완료로 판정)
   const [collecting, setCollecting] = useState<Record<string, string | null>>({});
+  const [resolveNote, setResolveNote] = useState("");
 
   const openPreview = async (source: string) => {
     setPreviewLoading(source);
@@ -433,11 +437,44 @@ export default function AdminPage() {
                           )}
                         </div>
                       </div>
-                      {h.resolved_at && (
+                      {h.resolved_at ? (
                         <p className="mt-3 text-xs text-gray-500">
                           Resolved: {new Date(h.resolved_at).toLocaleString()}
                           {h.resolution_method && ` — ${h.resolution_method}`}
                         </p>
+                      ) : (
+                        <div className="mt-3 flex gap-2 items-center">
+                          <input
+                            value={resolveNote}
+                            onChange={(e) => setResolveNote(e.target.value)}
+                            placeholder="해결 방법/내용 (예: 의존성 설치 후 재실행 확인)"
+                            className="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs"
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!resolveNote.trim()) {
+                                setBanner({ kind: "error", text: "해결 내용을 입력해야 합니다." });
+                                return;
+                              }
+                              try {
+                                await resolveVerificationHistory(
+                                  h.history_id,
+                                  { note: resolveNote.trim() },
+                                  "manual_resolution",
+                                );
+                                setResolveNote("");
+                                setExpandedHistory(null);
+                                setBanner({ kind: "info", text: `이력 ${h.history_id} 해결 처리되었습니다.` });
+                                refresh();
+                              } catch (e) {
+                                setBanner({ kind: "error", text: `해결 처리 실패: ${e instanceof Error ? e.message : String(e)}` });
+                              }
+                            }}
+                            className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 shrink-0"
+                          >
+                            해결 처리
+                          </button>
+                        </div>
                       )}
                     </div>
                   );

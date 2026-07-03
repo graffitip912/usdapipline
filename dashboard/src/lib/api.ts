@@ -253,6 +253,18 @@ export function getDataPreview(source: string, sampleRows = 50): Promise<DataPre
   return fetchApi(`/api/verification/preview/${source}?sample_rows=${sampleRows}`);
 }
 
+export function resolveVerificationHistory(
+  historyId: string,
+  toBe: Record<string, unknown>,
+  resolutionMethod: string,
+): Promise<{ status: string; history_id: string }> {
+  return fetchApi(`/api/verification/history/${historyId}/resolve`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to_be: toBe, resolution_method: resolutionMethod }),
+  });
+}
+
 export function submitReview(body: {
   source: string;
   user_verdict: string;

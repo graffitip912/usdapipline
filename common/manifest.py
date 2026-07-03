@@ -31,8 +31,13 @@ _COLUMNS = [
     "error_message",
 ]
 
-# USER-CONFIG: max consecutive failures before marking source as stale
-MAX_RETRIES = 3
+def _max_retries() -> int:
+    """Stale threshold — declared in harness.yaml (runtime_rules.retry_policy.max_retries)."""
+    try:
+        from common.harness_config import get_retry_policy
+        return int(get_retry_policy().get("max_retries", 3))
+    except Exception:
+        return 3
 
 _cache: pd.DataFrame | None = None
 _lock = threading.Lock()
@@ -101,7 +106,7 @@ def upsert(
         if status == "failed" and not existing.empty:
             prev_retries = int(existing.iloc[0].get("retry_count", 0))
             retry_count = prev_retries + 1
-            if retry_count >= MAX_RETRIES:
+            if retry_count >= _max_retries():
                 status = "stale"
 
         row = pd.DataFrame(
@@ -157,7 +162,7 @@ def record_failure(source: str, error_message: str = "") -> str:
             prev_retries = int(latest.get("retry_count", 0))
 
         retry_count = prev_retries + 1
-        status = "stale" if retry_count >= MAX_RETRIES else "failed"
+        status = "stale" if retry_count >= _max_retries() else "failed"
 
         row = pd.DataFrame(
             [{
@@ -178,6 +183,36 @@ def record_failure(source: str, error_message: str = "") -> str:
         df.to_parquet(MANIFEST_PATH, index=False, compression="zstd")
         _cache = df.copy()
         return status
+
+
+def record_skipped(source: str, reason: str = "") -> None:
+    """Record an intentionally skipped collection (e.g. API key not set).
+
+    Distinct from failure: retry counting is not advanced and the source
+    surfaces as status='skipped' in monitoring (seed.yaml all_sources_runnable
+    criteria).
+    """
+    with _lock:
+        global _cache
+        df = _cache.copy() if _cache is not None else _load_unlocked()
+        df = _ensure_columns(df)
+        row = pd.DataFrame(
+            [{
+                "source": source,
+                "artifact_type": "collection_attempt",
+                "period": datetime.utcnow().strftime("%Y-%m-%d"),
+                "path": "",
+                "sha256": "",
+                "status": "skipped",
+                "collected_at": datetime.utcnow().isoformat(),
+                "retry_count": 0,
+                "error_message": reason[:500],
+            }]
+        )
+        df = pd.concat([df, row], ignore_index=True)
+        MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(MANIFEST_PATH, index=False, compression="zstd")
+        _cache = df.copy()
 
 
 def record_success(source: str) -> None:

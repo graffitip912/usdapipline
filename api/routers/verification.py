@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from api.deps import get_data_backend
 from collector.run import run_source, SOURCES
-from common.harness_config import get_change_request_policy
+from common.harness_config import get_change_request_policy, get_verification_config
 from common.schema import validate_with_report
 from common.verification import (
     ChangeRequest,
@@ -56,6 +56,33 @@ async def get_verification_history(history_id: str) -> dict[str, Any]:
         if e.history_id == history_id:
             return e.model_dump()
     raise HTTPException(status_code=404, detail="History entry not found")
+
+
+class ResolveHistoryBody(BaseModel):
+    to_be: dict[str, Any]
+    resolution_method: str = ""
+
+
+@router.put("/history/{history_id}/resolve")
+async def resolve_verification_history(
+    history_id: str, body: ResolveHistoryBody,
+) -> dict[str, Any]:
+    """검증 실패 이력을 해결 처리 (as-is→to-be 마감).
+
+    to_be에 해결 후 상태를 기록하고 resolved_at을 스탬프.
+    시스템 경로로 해결 이력을 남기기 위한 엔드포인트 (감사 R3).
+    """
+    if not body.to_be:
+        raise HTTPException(400, "to_be must not be empty")
+    store = _get_store()
+    ok = store.update_history(
+        history_id,
+        to_be=body.to_be,
+        resolution_method=body.resolution_method,
+    )
+    if not ok:
+        raise HTTPException(404, "History entry not found")
+    return {"status": "resolved", "history_id": history_id}
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +159,17 @@ async def verification_summary(source: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 @router.get("/preview/{source}")
-async def data_preview(source: str, sample_rows: int = 20) -> dict[str, Any]:
-    """Preview collected data for user verification."""
+async def data_preview(source: str, sample_rows: int | None = None) -> dict[str, Any]:
+    """Preview collected data for user verification.
+
+    sample_rows 기본값과 이상치 z-score 임계값은 harness.yaml
+    (runtime_rules.verification)에서 읽음.
+    """
+    v_conf = get_verification_config()
+    if sample_rows is None:
+        sample_rows = int(v_conf.get("preview_sample_rows", 20))
+    z_threshold = float(v_conf.get("anomaly_zscore_threshold", 3.0))
+
     backend = get_data_backend()
     norm_path = f"normalized/structured/{source}.parquet"
 
@@ -155,7 +191,7 @@ async def data_preview(source: str, sample_rows: int = 20) -> dict[str, Any]:
             mean, std = series.mean(), series.std()
             if std > 0:
                 z_scores = ((series - mean) / std).abs()
-                outliers = z_scores[z_scores > 3.0]
+                outliers = z_scores[z_scores > z_threshold]
                 for idx in outliers.index[:5]:
                     anomalies.append({
                         "column": col,

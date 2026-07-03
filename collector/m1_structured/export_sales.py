@@ -149,18 +149,22 @@ def collect(since: int = 2010, force: bool = False) -> None:
             "ESR: FAS_OPENDATA_API_KEY not set, skipping. "
             "Get one at https://apps.fas.usda.gov/opendataweb/home"
         )
+        manifest.record_skipped(SOURCE, "FAS_OPENDATA_API_KEY not set")
         return
 
     commodity_codes = _discover_commodity_codes(api_key)
     if not commodity_codes:
-        log.warning("ESR: could not discover commodity codes")
-        return
+        # Visible failure: run_source records this in manifest + verification history
+        raise RuntimeError(
+            "ESR: commodity discovery failed — FAS opendata API unreachable"
+        )
 
     raw_dir = _raw_dir()
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     current_my = _current_market_year()
     all_frames: list[pd.DataFrame] = []
+    request_errors = 0
 
     for commodity, code in commodity_codes.items():
         for year in range(since, current_my + 1):
@@ -189,7 +193,8 @@ def collect(since: int = 2010, force: bool = False) -> None:
                     try:
                         data = _api_get_with_key(endpoint, api_key)
                     except Exception:
-                        log.debug("ESR: no data for %s/%d", commodity, year)
+                        log.debug("ESR: request failed for %s/%d", commodity, year)
+                        request_errors += 1
                         continue
 
                     if not data:
@@ -214,6 +219,7 @@ def collect(since: int = 2010, force: bool = False) -> None:
 
             except Exception:
                 log.exception("ESR: failed %s/%d", commodity, year)
+                request_errors += 1
 
     if all_frames:
         merged = pd.concat(all_frames, ignore_index=True)
@@ -232,8 +238,15 @@ def collect(since: int = 2010, force: bool = False) -> None:
             sha256=sha256_file(out),
         )
         log.info("ESR: wrote %d normalized records to %s", len(merged), out)
+    elif request_errors > 0:
+        # Nothing collected AND requests failed -> surface as a real failure
+        # instead of a silent "ok" (audit finding R1, 2026-07-03)
+        raise RuntimeError(
+            f"ESR: no data collected — {request_errors} request failures "
+            f"(FAS opendata outage?)"
+        )
     else:
-        log.warning("ESR: no records collected")
+        log.info("ESR: no new data (all cached/unchanged)")
 
 
 def _normalize_records(

@@ -15,21 +15,25 @@ log = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
 
-# USER-CONFIG: default cron schedules for collection groups
-DEFAULT_SCHEDULES: dict[str, dict[str, str]] = {
-    "weekly": {
-        # USER-CONFIG: weekly collection — every Friday at 06:00 UTC.
-        # Release days: WWCB Tue (Wed on holiday weeks), Export Sales Thu,
-        # GTR Thu — Friday collects the same week's releases within days.
-        "cron_expression": "0 6 * * 5",
-        "sources": "weekly",
-    },
-    "monthly": {
-        # USER-CONFIG: monthly collection — 15th of each month at 06:00 UTC
-        "cron_expression": "0 6 15 * *",
-        "sources": "monthly",
-    },
-}
+def _default_schedules() -> dict[str, dict[str, str]]:
+    """Cron defaults are declared in harness.yaml (runtime_rules.schedule_triggers)
+    — edit there, not here. Release days: WWCB Tue (Wed on holiday weeks),
+    Export Sales/GTR Thu → weekly Friday collects the same week's releases."""
+    from common.harness_config import get_runtime_rules
+    triggers = get_runtime_rules().get("schedule_triggers", {})
+    return {
+        "weekly": {
+            "cron_expression": triggers.get("weekly", "0 6 * * 5"),
+            "sources": "weekly",
+        },
+        "monthly": {
+            "cron_expression": triggers.get("monthly", "0 6 15 * *"),
+            "sources": "monthly",
+        },
+    }
+
+
+DEFAULT_SCHEDULES: dict[str, dict[str, str]] = _default_schedules()
 
 _job_states: dict[str, dict[str, Any]] = {}
 
