@@ -37,8 +37,15 @@ _USER_AGENT = (
 
 _session: requests.Session | None = None
 _lock = threading.Lock()
-_last_request_ts: float = 0.0
+_last_request_ts: dict[str, float] = {}
+# USER-CONFIG: minimum seconds between requests, per host.
+# esmis.nal.usda.gov declares "Crawl-delay: 10" in robots.txt — respect it
+# to avoid IP blocking. All other hosts use the default 1 req/sec.
 _MIN_INTERVAL_SEC = 1.0
+_HOST_MIN_INTERVAL_SEC = {
+    "esmis.nal.usda.gov": 10.0,
+    "usda.library.cornell.edu": 10.0,
+}
 
 
 def get_session() -> requests.Session:
@@ -53,13 +60,18 @@ def get_session() -> requests.Session:
         return _session
 
 
-def _rate_limit() -> None:
-    global _last_request_ts
+def _rate_limit(url: str = "") -> None:
+    host = ""
+    try:
+        host = url.split("/", 3)[2]
+    except IndexError:
+        pass
+    interval = _HOST_MIN_INTERVAL_SEC.get(host, _MIN_INTERVAL_SEC)
     with _lock:
-        elapsed = time.monotonic() - _last_request_ts
-        if elapsed < _MIN_INTERVAL_SEC:
-            time.sleep(_MIN_INTERVAL_SEC - elapsed)
-        _last_request_ts = time.monotonic()
+        elapsed = time.monotonic() - _last_request_ts.get(host, 0.0)
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
+        _last_request_ts[host] = time.monotonic()
 
 
 @retry(
@@ -74,7 +86,7 @@ def _rate_limit() -> None:
 )
 def fetch(url: str, *, params: dict[str, Any] | None = None,
           timeout: int = 120, stream: bool = False) -> requests.Response:
-    _rate_limit()
+    _rate_limit(url)
     resp = get_session().get(url, params=params, timeout=timeout, stream=stream)
     resp.raise_for_status()
     return resp
@@ -104,7 +116,7 @@ def fetch_json(url: str, *, params: dict[str, Any] | None = None,
 )
 def head(url: str, *, timeout: int = 15) -> requests.Response:
     """HEAD request with shared session, retry, rate-limit, and User-Agent."""
-    _rate_limit()
+    _rate_limit(url)
     resp = get_session().head(url, timeout=timeout, allow_redirects=True)
     resp.raise_for_status()
     return resp

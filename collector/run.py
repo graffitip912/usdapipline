@@ -34,6 +34,8 @@ from dotenv import load_dotenv
 
 from common import manifest
 from common.storage import ensure_dirs
+from common.schema import validate_with_report
+from common.verification import VerificationHistory, VerificationStore
 
 load_dotenv()
 
@@ -47,6 +49,21 @@ SOURCES = {
     "wwcb": ("collector.m2_reports.wwcb", "WWCB PDF", "weekly"),
     "wasde_pdf": ("collector.m2_reports.wasde_pdf", "WASDE PDF archive", "monthly"),
     "wwcb_images": ("collector.m3_images.wwcb_images", "WWCB image extraction", "weekly"),
+}
+
+# Manifest SOURCE constant per run key (each collector module's SOURCE).
+# The manifest stores both spellings: collectors write these canonical names,
+# run_source() failure records use the run key — status views must merge both.
+MANIFEST_SOURCES = {
+    "gtr": "USDA_AMS_GTR",
+    "quickstats": "USDA_NASS_QUICKSTATS",
+    "wasde": "USDA_WASDE",
+    "psd": "USDA_FAS_PSD",
+    "ers_feedgrains": "USDA_ERS_FEEDGRAINS",
+    "export_sales": "USDA_FAS_ESR",
+    "wwcb": "USDA_WWCB",
+    "wasde_pdf": "USDA_WASDE_PDF",
+    "wwcb_images": "USDA_WWCB_IMAGES",
 }
 
 log = logging.getLogger("collector")
@@ -73,12 +90,54 @@ def run_source(
         mod = __import__(module_path, fromlist=["collect"])
         mod.collect(since=since, force=force)
         manifest.record_success(source_key)
-        return {"source": source_key, "status": "ok", "error": None}
+
+        result: dict = {"source": source_key, "status": "ok", "error": None,
+                        "validation_report": None, "needs_user_review": True}
+
+        if source_key in ("wwcb", "wasde_pdf", "wwcb_images"):
+            result["needs_user_review"] = True
+            return result
+
+        try:
+            from common.data_access import get_backend
+            backend = get_backend()
+            norm_path = f"normalized/structured/{source_key}.parquet"
+            if backend.exists(norm_path):
+                df = backend.read_parquet(norm_path)
+                _, report = validate_with_report(df, source_key)
+                result["validation_report"] = report
+                if not report["schema_pass"]:
+                    store = VerificationStore()
+                    store.add_history(VerificationHistory(
+                        source=source_key,
+                        failure_reason=f"Schema validation failed: {report['dropped_count']} rows dropped",
+                        as_is={
+                            "row_count": report["row_count_before"],
+                            "dropped": report["dropped_count"],
+                            "errors": report["error_details"][:5],
+                        },
+                    ))
+        except Exception as val_exc:
+            log.warning("Post-collect validation for %s: %s", source_key, val_exc)
+
+        return result
     except Exception as exc:
         error_msg = traceback.format_exc()
         log.exception("FAILED: %s", source_key)
         result_status = manifest.record_failure(source_key, str(exc))
-        return {"source": source_key, "status": result_status, "error": error_msg}
+
+        try:
+            store = VerificationStore()
+            store.add_history(VerificationHistory(
+                source=source_key,
+                failure_reason=f"Collection failed: {exc}",
+                as_is={"error": str(exc), "traceback": error_msg[:500]},
+            ))
+        except Exception:
+            pass
+
+        return {"source": source_key, "status": result_status, "error": error_msg,
+                "validation_report": None, "needs_user_review": False}
 
 
 def _resolve_targets(source_arg: str) -> list[str]:

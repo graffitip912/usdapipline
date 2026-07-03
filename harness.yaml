@@ -1,0 +1,65 @@
+# USDA Grain Pipeline — Harness Configuration
+# dryforge(ready→go) 패턴의 런타임 설정 파일
+# seed.yaml = Ouroboros 스펙 | harness.yaml = 런타임 규칙
+
+dev_workflow:
+  stages:
+    - name: interview
+      gate: "ambiguity_score <= 0.2"
+      description: "Socratic interview로 요구사항 명확화"
+    - name: seed
+      gate: "qa_score >= 0.90"
+      description: "Seed YAML 생성 + QA Refinement Loop"
+    - name: run
+      gate: "all acceptance_criteria implemented"
+      description: "Seed 기반 코드 구현"
+    - name: evaluate
+      gate: "user_verified == true"
+      description: "3단계 검증 (자동 + 사용자 확인)"
+  constraints:
+    - "각 단계는 gate 조건 충족 후 다음 단계 진입"
+    - "evaluate 단계에서 변경 필요 시 seed 또는 run으로 회귀 가능"
+
+runtime_rules:
+  schedule_triggers:
+    # USER-CONFIG: 수집 스케줄 (cron 형식)
+    weekly: "0 6 * * 1"     # 매주 월요일 06:00 UTC
+    monthly: "0 6 15 * *"   # 매월 15일 06:00 UTC
+
+  retry_policy:
+    # USER-CONFIG: 재시도 정책
+    max_retries: 3           # 연속 실패 시 stale 전환 임계값
+    backoff_strategy: "none" # Phase 1에서는 즉시 재시도
+    stale_recovery: "next_scheduled_run"
+
+  verification:
+    auto_validation_enabled: true
+    auto_schema: "GrainSchema"
+    # USER-CONFIG: 사용자 직접 확인 필수 여부
+    user_confirmation_required: true
+    preview_sample_rows: 20
+    anomaly_zscore_threshold: 3.0
+
+  change_request_policy:
+    # USER-CONFIG: 변경 요청 루프 설정
+    max_loop_iterations: 10
+    status_transitions:
+      - "pending → applied"
+      - "applied → verified"
+      - "applied → rejected"
+      - "rejected → (new change_request)"
+    require_re_collect_after_apply: true
+    require_user_verify_after_re_collect: true
+
+  sources:
+    weekly:
+      - gtr
+      - quickstats
+      - export_sales
+      - wwcb
+      - wwcb_images
+    monthly:
+      - wasde
+      - psd
+      - ers_feedgrains
+      - wasde_pdf

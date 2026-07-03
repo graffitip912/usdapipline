@@ -75,6 +75,58 @@ USDA APIs/PDFs → collector/ (9 sources) → data/ (parquet/json/images)
 ```bash
 python -c "from api.main import app; print('API OK')"
 cd dashboard && npm run build
+
+# 배포 게이트: 시맨틱 e2e 검증 (API :8000 필수, 대시보드 :3000 권장)
+# UI→API 계약, Run 버튼 체인, 검증 preview, 스케줄 왕복 등 8개 체크.
+# HTTP 200이 아니라 응답 의미 + 관찰 가능한 상태 변화를 단언 — 변경 후 반드시 통과.
+python scripts/verify_pipeline.py
 ```
 
 @AGENTS.md
+
+<!-- ooo:START -->
+<!-- ooo:VERSION:0.43.3 -->
+# Ouroboros — Specification-First AI Development
+
+> Before telling AI what to build, define what should be built.
+> As Socrates asked 2,500 years ago — "What do you truly know?"
+> Ouroboros turns that question into an evolutionary AI workflow engine.
+
+Most AI coding fails at the input, not the output. Ouroboros fixes this by
+**exposing hidden assumptions before any code is written**.
+
+1. **Socratic Clarity** — Question until ambiguity ≤ 0.2
+2. **Ontological Precision** — Solve the root problem, not symptoms
+3. **Evolutionary Loops** — Each evaluation cycle feeds back into better specs
+
+```
+Interview → Seed → Execute → Evaluate
+    ↑                           ↓
+    └─── Evolutionary Loop ─────┘
+```
+
+## ooo Commands
+
+Each command loads its agent/MCP on-demand. Details in each skill file.
+
+| Command | Loads |
+|---------|-------|
+| `ooo` | — |
+| `ooo interview` | `ouroboros:socratic-interviewer` |
+| `ooo seed` | `ouroboros:seed-architect` |
+| `ooo run` | MCP required |
+| `ooo evolve` | MCP: `evolve_step` |
+| `ooo evaluate` | `ouroboros:evaluator` |
+| `ooo unstuck` | `ouroboros:{persona}` |
+| `ooo status` | MCP: `session_status` |
+| `ooo setup` | — |
+| `ooo help` | — |
+
+## Agents
+
+Loaded on-demand — not preloaded.
+
+**Core**: socratic-interviewer, ontologist, seed-architect, evaluator,
+wonder, reflect, advocate, contrarian, judge
+**Support**: hacker, simplifier, researcher, architect
+<!-- ooo:END -->

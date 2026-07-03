@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import logging
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
-from common import manifest
-from common.http import download_file, fetch, head_ok
+from common import esmis, manifest
+from common.http import download_file, head_ok
 from common.schema import validate_and_stamp
 from common.storage import RAW_DIR, ensure_dirs, norm_path, sha256_file
 
@@ -22,6 +23,8 @@ log = logging.getLogger(__name__)
 
 SOURCE = "USDA_WASDE"
 
+# Primary: OCE consolidated historical CSV (2010-present, richest format).
+# Fallback: official ESMIS/Cornell API XML (per-release, see _collect_from_esmis).
 URL_TEMPLATE = (
     "https://www.usda.gov/sites/default/files/documents/"
     "oce-wasde-report-data-{year}-{month:02d}.csv"
@@ -62,7 +65,15 @@ METRIC_NORM = {
 
 
 def _discover_latest_csv_url() -> str | None:
-    """Try recent 18 months to find the latest published CSV."""
+    """Try recent 18 months to find the latest published OCE CSV.
+
+    Circuit-breaker: after 3 consecutive failures www.usda.gov is
+    considered unreachable and we fall back to ESMIS (see collect()).
+    """
+    # USER-CONFIG: max consecutive timeouts before falling back to ESMIS
+    max_consecutive_failures = 3
+    consecutive_failures = 0
+
     now = datetime.utcnow()
     for months_back in range(0, 18):
         year = now.year
@@ -71,9 +82,16 @@ def _discover_latest_csv_url() -> str | None:
             month += 12
             year -= 1
         url = URL_TEMPLATE.format(year=year, month=month)
-        if head_ok(url, timeout=15):
+        if head_ok(url, timeout=10):
             log.info("WASDE: found CSV at %s", url)
             return url
+        consecutive_failures += 1
+        if consecutive_failures >= max_consecutive_failures:
+            log.warning(
+                "WASDE: %d consecutive HEAD failures on www.usda.gov — will use ESMIS fallback",
+                consecutive_failures,
+            )
+            return None
     return None
 
 
@@ -81,9 +99,18 @@ def collect(since: int = 2010, force: bool = False) -> None:
     ensure_dirs()
 
     url = _discover_latest_csv_url()
-    if url is None:
-        raise RuntimeError("WASDE: could not find any CSV in last 18 months")
+    if url is not None:
+        try:
+            _collect_from_csv(url, since, force)
+            return
+        except Exception:
+            log.exception("WASDE: CSV path failed — falling back to ESMIS")
 
+    log.info("WASDE: collecting from official ESMIS archive")
+    _collect_from_esmis(since, force)
+
+
+def _collect_from_csv(url: str, since: int, force: bool) -> None:
     filename = url.rsplit("/", 1)[-1]
     dest = RAW_DIR / "wasde" / filename
     download_file(url, dest)
@@ -92,15 +119,6 @@ def collect(since: int = 2010, force: bool = False) -> None:
     if not force and manifest.has_unchanged(SOURCE, file_hash):
         log.info("WASDE: CSV unchanged, skipping normalization")
         return
-
-    manifest.upsert(
-        source=SOURCE,
-        artifact_type="raw_csv",
-        period=f"{since}-present",
-        path=dest,
-        sha256=file_hash,
-    )
-    log.info("WASDE: saved raw CSV -> %s", dest)
 
     df_raw = _read_csv(dest)
     if df_raw is None or df_raw.empty:
@@ -111,6 +129,15 @@ def collect(since: int = 2010, force: bool = False) -> None:
     if df_norm.empty:
         log.warning("WASDE: no records after normalization")
         return
+
+    manifest.upsert(
+        source=SOURCE,
+        artifact_type="raw_csv",
+        period=f"{since}-present",
+        path=dest,
+        sha256=file_hash,
+    )
+    log.info("WASDE: saved raw CSV -> %s", dest)
 
     df_norm = _add_derived_metrics(df_norm)
     df_norm = validate_and_stamp(df_norm, SOURCE)
@@ -124,6 +151,192 @@ def collect(since: int = 2010, force: bool = False) -> None:
         sha256=sha256_file(out),
     )
     log.info("WASDE: wrote %d normalized records -> %s", len(df_norm), out)
+
+
+# ---------------------------------------------------------------------------
+# ESMIS fallback — official USDA archive (esmis.nal.usda.gov via Cornell API)
+# ---------------------------------------------------------------------------
+
+# XML sub-report -> (commodity, matrix element) for U.S. supply & demand tables.
+# Verified against wasde0626v2.xml: sr11=US wheat, sr12 matrix2=US corn,
+# sr15 matrix1=US soybeans.
+_XML_US_TABLES = {
+    "sr11": ("WHEAT", "matrix1"),
+    "sr12": ("CORN", "matrix2"),
+    "sr15": ("SOYBEAN", "matrix1"),
+}
+
+# Extra aliases for XML attribute spellings not in METRIC_NORM
+_XML_METRIC_ALIASES = {
+    "FEED AND RESIDUAL": "feed_residual",
+    "CRUSHINGS": "crush",
+    "AVG. FARM PRICE": "avg_farm_price",
+    "ETHANOL & BY-PRODUCTS": "ethanol_byproducts",
+}
+
+_XML_UNIT_BY_METRIC = {
+    "area_planted": "Million Acres",
+    "area_harvested": "Million Acres",
+    "yield": "Bushels",
+    "avg_farm_price": "$/bu",
+}
+_XML_DEFAULT_UNIT = "Million Bushels"
+
+
+def _collect_from_esmis(since: int, force: bool) -> None:
+    """Download the latest WASDE XML from the official ESMIS archive and
+    merge its U.S. corn/soybean/wheat tables into the normalized parquet."""
+    try:
+        releases = esmis.release_files("wasde")
+    except Exception:
+        log.exception("WASDE: ESMIS API unreachable")
+        return
+    if not releases:
+        log.error("WASDE: ESMIS API returned no releases")
+        return
+
+    report_date, files = releases[0]
+    xml_url = esmis.pick_file(files, "xml")
+    if xml_url is None:
+        log.error("WASDE: latest ESMIS release has no XML file: %s", files)
+        return
+
+    dest = RAW_DIR / "wasde" / xml_url.rsplit("/", 1)[-1]
+    try:
+        download_file(xml_url, dest)
+    except Exception:
+        log.exception("WASDE: ESMIS XML download failed: %s", xml_url)
+        return
+    file_hash = sha256_file(dest)
+
+    if not force and manifest.has_unchanged(SOURCE, file_hash) and norm_path("wasde.parquet").exists():
+        log.info("WASDE: ESMIS XML unchanged, skipping normalization")
+        return
+
+    df_new = _normalize_xml(dest, since, report_date)
+    if df_new.empty:
+        log.warning("WASDE: no records parsed from ESMIS XML")
+        return
+
+    # Raw manifest only after successful normalization, so a parse failure
+    # does not mark the hash as ingested and permanently skip this release.
+    manifest.upsert(
+        source=SOURCE,
+        artifact_type="raw_xml_esmis",
+        period=report_date.strftime("%Y-%m"),
+        path=dest,
+        sha256=file_hash,
+    )
+    log.info("WASDE: saved ESMIS XML -> %s", dest)
+
+    df_new = _add_derived_metrics(df_new)
+    # Stamp/validate BEFORE merging: concat with an already-stamped parquet
+    # would leave new rows with ingested_at=NaT and pandera would drop them.
+    df_new = validate_and_stamp(df_new, SOURCE)
+
+    # Merge with existing normalized data. report_date is part of the key so
+    # monthly report vintages accumulate instead of overwriting each other.
+    out = norm_path("wasde.parquet")
+    if out.exists():
+        df_old = pd.read_parquet(out)
+        df_new = pd.concat([df_old, df_new], ignore_index=True)
+        df_new = df_new.drop_duplicates(
+            subset=["commodity", "obs_date", "metric", "region",
+                    "marketing_year", "report_date"],
+            keep="last",
+        )
+
+    df_new.to_parquet(out, index=False, compression="zstd")
+    manifest.upsert(
+        source=SOURCE,
+        artifact_type="normalized_parquet",
+        period=f"{since}-present",
+        path=out,
+        sha256=sha256_file(out),
+    )
+    log.info("WASDE: wrote %d normalized records (ESMIS) -> %s", len(df_new), out)
+
+
+def _clean_xml_attribute(raw: str) -> str:
+    """'Avg. Farm Price ($/bu)  2/' -> 'AVG. FARM PRICE'"""
+    s = re.sub(r"\([^)]*\)", "", raw)          # drop parenthesised units
+    s = re.sub(r"(?:\s*\d+/)+\s*$", "", s)      # drop trailing footnote refs (may repeat)
+    return re.sub(r"\s+", " ", s).strip().upper()
+
+
+def _canonical_marketing_year(raw: str) -> str:
+    """'2025/26 Est.' / '2026/27 Proj.' -> '2025/26' (shared by CSV/XML paths
+    so the merge dedupe key stays consistent)."""
+    return re.sub(r"\s*(Est\.|Proj\.)\s*$", "", raw).strip()
+
+
+def _clean_xml_value(raw: str) -> float | None:
+    s = raw.replace(",", "").replace("*", "").strip()
+    if not s or s.upper() in ("NA", "NONE", "---"):
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _normalize_xml(path: Path, since: int, report_date: datetime) -> pd.DataFrame:
+    """Parse U.S. S&D tables from a WASDE ESMIS XML into the unified schema.
+
+    Year columns may repeat (previous vs. current projection); document
+    order guarantees the last occurrence is the current report's value.
+    """
+    root = ET.parse(path).getroot()
+    records: list[dict] = []
+
+    for sr_name, (commodity, matrix_name) in _XML_US_TABLES.items():
+        sr = root.find(sr_name)
+        rep = sr.find("Report") if sr is not None else None
+        matrix = rep.find(matrix_name) if rep is not None else None
+        if matrix is None:
+            log.warning("WASDE XML: table %s/%s not found", sr_name, matrix_name)
+            continue
+
+        for ag in matrix.iter():
+            if not (ag.tag.startswith("attribute") and ag.attrib):
+                continue
+            attr_key = _clean_xml_attribute(next(iter(ag.attrib.values())))
+            metric_slug = METRIC_NORM.get(attr_key) or _XML_METRIC_ALIASES.get(attr_key)
+            if metric_slug is None:
+                metric_slug = re.sub(r"[^a-z0-9]+", "_", attr_key.lower()).strip("_")
+
+            # last cell per marketing year == current projection
+            year_values: dict[str, float] = {}
+            for yg in ag.iter():
+                my_raw = next(
+                    (v for k, v in yg.attrib.items() if k.startswith("market_year")),
+                    None,
+                )
+                if my_raw is None:
+                    continue
+                my = _canonical_marketing_year(my_raw)
+                for cell in yg.iter("Cell"):
+                    val = _clean_xml_value(next(iter(cell.attrib.values()), ""))
+                    if val is not None:
+                        year_values[my] = val
+
+            for my, value in year_values.items():
+                obs_date = _parse_marketing_year_date(my, since)
+                if obs_date is None or obs_date.year < since:
+                    continue
+                records.append({
+                    "obs_date": obs_date,
+                    "marketing_year": my,
+                    "commodity": commodity,
+                    "region": "US",
+                    "metric": f"wasde__{metric_slug}",
+                    "value": value,
+                    "unit": _XML_UNIT_BY_METRIC.get(metric_slug, _XML_DEFAULT_UNIT),
+                    "source": SOURCE,
+                    "report_date": report_date,
+                })
+
+    return pd.DataFrame(records)
 
 
 def _read_csv(path: Path) -> pd.DataFrame | None:
@@ -192,7 +405,7 @@ def _normalize(df: pd.DataFrame, since: int) -> pd.DataFrame:
         unit = str(row.get(unit_col, "")).strip() if unit_col else ""
         region = str(row.get(region_col, "US")).strip() if region_col else "US"
 
-        my = str(row.get(year_col, "")).strip() if year_col else None
+        my = _canonical_marketing_year(str(row.get(year_col, ""))) if year_col else None
         obs_date = _parse_marketing_year_date(my, since)
         if obs_date is None:
             continue

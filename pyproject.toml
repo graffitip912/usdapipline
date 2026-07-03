@@ -1,24 +1,35 @@
 [project]
 name = "usda-grain-pipeline"
-version = "0.1.0"
+version = "0.2.0"
 description = "USDA grain data collection pipeline for CBOT futures price prediction"
 requires-python = ">=3.10"
+# 상한은 검증된 실환경(requirements-lock.txt) 기준 — lock과 충돌 금지
 dependencies = [
     "requests>=2.31,<3",
-    "pandas>=2.1,<3",
+    "pandas>=2.1,<4",
     "openpyxl>=3.1,<4",
-    "pyarrow>=14.0,<20",
+    "pyarrow>=14.0,<25",
     "pydantic>=2.5,<3",
     "pandera>=0.18,<1",
     "python-dotenv>=1.0,<2",
     "tenacity>=8.2,<10",
     "pymupdf>=1.24,<2",
-    "Pillow>=10.0,<12",
+    "Pillow>=10.0,<13",
     "imagehash>=4.3,<5",
     "pytesseract>=0.3.10,<1",
     "fastapi>=0.110,<1",
-    "uvicorn[standard]>=0.27,<1",
+    "uvicorn>=0.27,<1",
     "apscheduler>=3.10,<4",
+    "pyyaml>=6.0,<7",
+]
+
+[project.optional-dependencies]
+# USER-CONFIG: pip install -e ".[ml]" for Hugging Face model inference
+ml = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "datasets>=2.18",
+    "accelerate>=0.28",
 ]
 
 [project.scripts]

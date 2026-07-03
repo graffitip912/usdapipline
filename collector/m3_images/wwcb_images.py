@@ -24,9 +24,7 @@ from common.data_access import get_backend
 from common.storage import sha256_file
 
 from collector.m3_images.image_filter import (
-    FilterResult,
     HashFilter,
-    RuleFilter,
     apply_filters,
     init_curation,
 )
@@ -34,6 +32,8 @@ from collector.m3_images.ocr_classifier import (
     classify_by_ocr,
     extract_ocr_text,
     extract_section_header,
+    lookup_toc_section,
+    parse_wwcb_toc,
 )
 
 log = logging.getLogger(__name__)
@@ -150,6 +150,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
     seen_xrefs = set()
 
     page_texts = [_extract_page_text(doc[i]) for i in range(total_pages)]
+    toc = parse_wwcb_toc(page_texts[0]) if page_texts else {}
 
     for page_num in range(total_pages):
         page = doc[page_num]
@@ -160,6 +161,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
 
         best_text, page_region, text_sources = _find_best_text(page_texts, page_num)
         section_header = extract_section_header(page_texts[page_num])
+        toc_section = lookup_toc_section(toc, page_num + 1)
 
         for img_idx, img_info in enumerate(image_list):
             xref = img_info[0]
@@ -235,6 +237,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
                 "page_text": best_text,
                 "ocr_text": ocr_text,
                 "section_header": section_header,
+                "toc_section": toc_section,
                 "text_source_pages": [p + 1 for p in text_sources],
                 "filter_stage": filter_result.stage,
                 "filter_reason": filter_result.reason,

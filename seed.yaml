@@ -1,0 +1,200 @@
+# USDA Grain Pipeline — dryforge(ready→go) Harness Seed
+# Generated: 2026-07-02 | QA Score: 0.94 (PASS) | Iteration: 2
+# Interview: Plugin Fallback Path B (Ouroboros Socratic Interview)
+# Audit trail: ~/.ouroboros/seed-revisions/
+
+goal: >
+  USDA Grain Pipeline의 하네스 구조를 dryforge(ready→go) 패턴으로 전면 재구성하여,
+  Ouroboros 기반 개발 워크플로우(interview→seed→run→evaluate)와 런타임 실행(수집기
+  스케줄링·모니터링·데이터 검증)을 단계적으로 통합하되, 무료 서비스만 사용하고
+  서버 부하·파이프라인 연속성·관리 휴대성을 고려하며, 기존 배포 구조의 수정도 허용한다.
+
+constraints:
+  - "Python >= 3.10 (pyproject.toml requires-python)"
+  - "무료 서비스만 사용 — 유료 API·클라우드 서비스 금지"
+  - "USDA 데이터 소스만 사용 — 외부 데이터 추가 없음"
+  - "모든 데이터 접근은 DataBackend ABC를 통해 — 직접 경로 참조 금지"
+  - "외부 LLM API 사용 금지 — 이미지 분류는 규칙+해싱+Tesseract OCR"
+  - "data/ 디렉토리는 gitignore — 런타임 데이터만 저장"
+  - "기존 collector 9개 소스의 인터페이스(collect(since, force)) 유지"
+  - "FastAPI + Next.js 이중 프로세스 아키텍처 유지"
+  - "서버 부하 최소화 — APScheduler in-process, 별도 워커 프로세스 불필요"
+  - "관리 휴대성 — 단일 머신에서 .env + pip install -e . 로 전체 실행 가능"
+  - "검증 실패 이력은 as-is→to-be 형태로 기록하여 추적 가능해야 함"
+  - "데이터 검증은 자동 검증 후 반드시 사용자가 직접 확인해야 완료로 처리"
+  - "수집 방식/내용 변경 시: 사용자 명세→반영→재검증→사용자 확인 루프를 거쳐 최종 승인 필요"
+
+acceptance_criteria:
+  - id: AC-1
+    title: "하네스 설정"
+    description: >
+      프로젝트에 하네스 설정 파일(harness.yaml 또는 동등물)이 존재하며,
+      개발 워크플로우 규율(interview→seed→run→evaluate 순서와 게이트)과 런타임 실행
+      규칙(스케줄 트리거·재시도 정책·검증 임계값)을 선언적으로 정의한다.
+  - id: AC-2
+    title: "수집 실행"
+    description: >
+      collector 9개 전체가 run_source() 호출로 정상 완료되고,
+      manifest.parquet에 수집 이력(source, status, sha256, collected_at, retry_count)이
+      기록되며, 실패 시 retry→stale 생명주기가 동작한다.
+  - id: AC-3
+    title: "데이터 검증 (자동 + 사용자 확인)"
+    description: >
+      수집된 Parquet 파일이 GrainSchema(Pandera) 자동 검증을 통과한 후,
+      사용자가 데이터 샘플·통계·이상값을 직접 확인하여 승인해야 검증 완료로 처리된다.
+      검증 실패 시 (a) manifest에 failed 상태와 error_message가 기록되고,
+      (b) /api/collector/status에 실패 원인이 노출되며,
+      (c) 실패→수정 과정이 as-is(실패 당시 상태)→to-be(수정 후 상태)로
+      verification_history에 기록되어 이력 추적이 가능하다.
+      자동 검증 통과만으로는 완료가 아니며, 사용자의 명시적 승인이 최종 게이트이다.
+  - id: AC-4
+    title: "모니터링"
+    description: >
+      /api/collector/status 엔드포인트가 9개 소스별 상태(success/failed/stale),
+      마지막 성공 시각, 재시도 횟수, 최근 검증 실패 사유를 정확히 보고한다.
+  - id: AC-5
+    title: "대시보드 확인"
+    description: >
+      Next.js 대시보드의 grain, images, admin 페이지가 API 데이터를
+      정상 렌더링하며, admin 페이지에서 검증 이력(as-is→to-be)을 확인할 수 있다.
+  - id: AC-6
+    title: "수집 변경 요청 루프"
+    description: >
+      사용자가 데이터 검증 중 수집 방식 또는 수집 내용의 변경이 필요하다고 판단하면:
+      (1) 사용자가 변경사항을 명세(change_request)로 작성하고,
+      (2) 명세가 수집기·스키마·검증 로직에 반영되며,
+      (3) 변경된 수집기로 재수집→재검증(자동+사용자 확인)을 수행하고,
+      (4) 사용자가 재검증 결과를 확인하여 승인 또는 추가 변경을 요청한다.
+      이 (1)→(2)→(3)→(4) 루프는 사용자의 최종 승인이 날 때까지 반복되며,
+      각 반복의 change_request와 결과가 verification_history에 이력으로 기록된다.
+
+ontology_schema:
+  name: USDAGrainHarness
+  description: >
+    dryforge(ready→go) 패턴의 하네스 도메인 모델. 개발 워크플로우 명세와
+    런타임 파이프라인 실행을 단일 구조로 통합.
+  fields:
+    - name: harness_config
+      type: object
+      description: >
+        dryforge ready 단계의 하네스 설정 — dev_workflow(interview→seed→run→evaluate 게이트),
+        runtime_rules(스케줄 트리거, 재시도 정책, 검증 임계값)
+    - name: collector_source
+      type: object
+      description: "수집기 소스 정의 — module_path, label, schedule_group(weekly|monthly)"
+    - name: manifest_entry
+      type: object
+      description: "수집 이력 레코드 — source, status, sha256, collected_at, retry_count, error_message"
+    - name: grain_record
+      type: object
+      description: "정규화된 곡물 데이터 — obs_date, commodity, metric, value, unit, source"
+    - name: schedule_job
+      type: object
+      description: "스케줄 작업 — source_group, cron_expression, paused, next_run"
+    - name: validation_result
+      type: object
+      description: "데이터 검증 결과 — source, schema_pass, row_count, error_details, validated_at"
+    - name: verification_history
+      type: object
+      description: >
+        검증 실패→수정 이력 — source, failed_at, failure_reason(왜 실패했는지),
+        as_is(실패 당시 상태 스냅샷), to_be(수정 후 상태 스냅샷),
+        resolved_at, resolution_method(어떻게 수정했는지)
+    - name: change_request
+      type: object
+      description: >
+        수집 변경 요청서 — request_id, requested_by(user), requested_at,
+        target_source(변경 대상 수집기), change_type(method|content|schema|schedule),
+        description(변경 내용 명세), status(pending→applied→verified→rejected),
+        linked_verification(반영 후 검증 결과 참조)
+    - name: user_review
+      type: object
+      description: >
+        사용자 검증 리뷰 — review_id, source, reviewed_at, reviewer(user),
+        auto_validation_passed(boolean), user_verdict(approved|change_requested|rejected),
+        remarks(사용자 코멘트), linked_change_request(변경 요청 시 참조)
+
+evaluation_principles:
+  - name: pipeline_continuity
+    description: "파이프라인이 단일 소스 실패로 전체 중단되지 않고 나머지를 계속 처리"
+    weight: 1.0
+  - name: data_integrity
+    description: "수집·정규화·서빙 전 과정에서 데이터 스키마와 타입이 보존됨"
+    weight: 1.0
+  - name: user_gated_verification
+    description: "자동 검증 통과만으로 완료 불가 — 사용자 직접 확인+승인이 최종 게이트"
+    weight: 1.0
+  - name: verification_traceability
+    description: "검증 실패의 원인과 수정 과정이 as-is→to-be로 추적 가능"
+    weight: 0.9
+  - name: change_loop_discipline
+    description: "수집 변경 시 명세→반영→재검증→승인 루프가 이력과 함께 완결됨"
+    weight: 0.9
+  - name: operational_portability
+    description: "단일 머신에서 .env + pip install로 전체 스택 실행 가능"
+    weight: 0.9
+  - name: harness_discipline
+    description: "ready→go 패턴이 코드와 문서 양쪽에 명시적으로 반영됨"
+    weight: 0.8
+  - name: server_load_efficiency
+    description: "APScheduler in-process, 별도 큐/워커 없이 경량 운영"
+    weight: 0.7
+
+exit_conditions:
+  - name: user_verified_pipeline
+    description: "사용자가 수집기 실행 → API 응답 → 데이터 검증 → 대시보드 확인을 직접 수행하고 완료 판정"
+    criteria: "사용자가 4단계(수집→데이터 직접 확인→API→대시보드) 확인 후 명시적 승인"
+  - name: harness_config_exists
+    description: "dryforge ready 단계 산출물인 하네스 설정 파일이 프로젝트에 존재"
+    criteria: "harness.yaml(또는 seed.yaml)이 유효한 YAML로 존재하고, dev_workflow + runtime_rules 섹션을 포함"
+  - name: all_sources_runnable
+    description: "9개 수집기 모두 run_source()로 실행 가능"
+    criteria: "collector.run.run_source(key)가 9개 소스에서 정상 완료. API 키 미설정 소스는 status='skipped'로 처리하되, 키 설정 후 재실행 시 정상 동작"
+  - name: verification_history_operational
+    description: "검증 실패 이력 추적 시스템이 동작"
+    criteria: "검증 실패 발생 시 verification_history에 as-is/to-be 레코드가 자동 생성되고, API를 통해 조회 가능"
+  - name: user_data_verification_gate
+    description: "데이터 검증이 사용자 직접 확인을 거쳐야 완료 처리"
+    criteria: "자동 검증 통과 후 user_review 레코드에 user_verdict='approved'가 기록되어야 해당 소스의 검증이 완료 상태로 전환"
+  - name: change_loop_closed
+    description: "수집 변경 요청 루프가 완결됨 — 사용자 직접 확인 필수"
+    criteria: >
+      다음 중 하나를 사용자가 직접 확인하여 완료를 판정:
+      (a) 최소 1회 이상 change_request 루프(생성→적용→재수집→검증)를 완주한 이력이
+      verification_history에 기록되어 있고, 모든 CR의 status가 'verified'이며,
+      사용자가 루프 결과를 확인하고 완료를 승인, 또는
+      (b) 사용자가 데이터 검증 후 변경 불필요로 판단하여 명시적으로 skip 승인.
+      어느 경우든 사용자의 명시적 판정이 최종 게이트이다.
+
+metadata:
+  version: "1.3.0"
+  created_at: "2026-07-02"
+  qa_score: 0.94
+  qa_verdict: pass
+  qa_iterations: 3
+  interview_closure: "plugin_fallback_path_b"
+  project_type: brownfield
+  context_references:
+    - path: "common/data_access.py"
+      role: primary
+      summary: "DataBackend ABC + LocalBackend"
+    - path: "collector/run.py"
+      role: primary
+      summary: "CLI + run_source(), 9개 소스 정의"
+    - path: "api/main.py"
+      role: primary
+      summary: "FastAPI 앱 + lifespan 스케줄러"
+    - path: "api/scheduler.py"
+      role: primary
+      summary: "APScheduler weekly/monthly cron"
+    - path: "common/manifest.py"
+      role: primary
+      summary: "수집 이력 — success→failed→stale"
+    - path: "dashboard/src/lib/api.ts"
+      role: reference
+      summary: "Next.js → FastAPI 클라이언트"
+  existing_patterns:
+    - "DataBackend ABC를 통한 데이터 접근 추상화"
+    - "# USER-CONFIG: 마커 주석으로 튜닝 가능 값 표시"
+    - "collector.run.SOURCES dict로 소스 등록"
+    - "manifest.parquet로 수집 이력 추적"

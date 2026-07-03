@@ -18,8 +18,10 @@ _scheduler: AsyncIOScheduler | None = None
 # USER-CONFIG: default cron schedules for collection groups
 DEFAULT_SCHEDULES: dict[str, dict[str, str]] = {
     "weekly": {
-        # USER-CONFIG: weekly collection — every Monday at 06:00 UTC
-        "cron_expression": "0 6 * * 1",
+        # USER-CONFIG: weekly collection — every Friday at 06:00 UTC.
+        # Release days: WWCB Tue (Wed on holiday weeks), Export Sales Thu,
+        # GTR Thu — Friday collects the same week's releases within days.
+        "cron_expression": "0 6 * * 5",
         "sources": "weekly",
     },
     "monthly": {
@@ -46,7 +48,7 @@ def _parse_cron(expr: str) -> dict[str, str]:
 
 
 def _run_collection_sync(source_arg: str) -> None:
-    from collector.run import run_source, SOURCES, _resolve_targets
+    from collector.run import run_source, _resolve_targets
     targets = _resolve_targets(source_arg)
     for source_key in targets:
         result = run_source(source_key)

@@ -103,3 +103,67 @@ def validate_and_stamp(df: pd.DataFrame, source: str) -> pd.DataFrame:
         GrainSchema.validate(df, lazy=True)
 
     return df
+
+
+def validate_with_report(
+    df: pd.DataFrame, source: str,
+) -> tuple[pd.DataFrame, dict]:
+    """Run validation and return (cleaned_df, report).
+
+    The report dict contains structured validation results for
+    verification history and user review preview.
+    """
+    row_count_before = len(df)
+    report: dict = {
+        "source": source,
+        "schema_pass": True,
+        "row_count_before": row_count_before,
+        "row_count_after": 0,
+        "dropped_count": 0,
+        "error_details": [],
+        "sample_stats": {},
+    }
+
+    df_copy = df.copy()
+    if "ingested_at" not in df_copy.columns:
+        df_copy["ingested_at"] = pd.Timestamp.utcnow()
+    if "source" not in df_copy.columns:
+        df_copy["source"] = source
+    for col in ("obs_date", "report_date", "ingested_at"):
+        df_copy[col] = pd.to_datetime(df_copy[col], errors="coerce")
+    df_copy["value"] = pd.to_numeric(df_copy["value"], errors="coerce")
+    df_copy = df_copy.dropna(subset=["value"])
+    df_copy = clip_dates(df_copy, "obs_date")
+    df_copy = clip_dates(df_copy, "report_date")
+
+    try:
+        GrainSchema.validate(df_copy, lazy=True)
+    except pa.errors.SchemaErrors as exc:
+        failure_cases = exc.failure_cases
+        report["schema_pass"] = False
+        report["error_details"] = failure_cases.head(20).to_dict("records")
+
+        bad_indices = set(failure_cases["index"].dropna().astype(int))
+        df_copy = df_copy.drop(index=bad_indices, errors="ignore")
+        if not df_copy.empty:
+            try:
+                GrainSchema.validate(df_copy, lazy=True)
+                report["schema_pass"] = True
+            except pa.errors.SchemaErrors:
+                report["schema_pass"] = False
+
+    report["row_count_after"] = len(df_copy)
+    report["dropped_count"] = row_count_before - len(df_copy)
+
+    numeric_cols = df_copy.select_dtypes(include="number").columns.tolist()
+    for col in numeric_cols:
+        series = df_copy[col].dropna()
+        if not series.empty:
+            report["sample_stats"][col] = {
+                "min": float(series.min()),
+                "max": float(series.max()),
+                "mean": round(float(series.mean()), 4),
+                "null_pct": round(float(df_copy[col].isna().mean()) * 100, 2),
+            }
+
+    return df_copy, report

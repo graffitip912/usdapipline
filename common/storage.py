@@ -53,11 +53,13 @@ _NORM_DIRS = ["normalized/structured", "normalized/wwcb_narrative"]
 _ASSET_DIRS = [
     "assets/wwcb", "assets/wwcb/images", "assets/wwcb/metadata", "assets/geo",
 ]
+_META_DIRS = ["meta/verification"]
+_CURATED_DIRS = ["curated/wwcb_images"]
 
 
 def ensure_dirs() -> None:
     backend = get_backend()
-    for d in _RAW_DIRS + _NORM_DIRS + _ASSET_DIRS:
+    for d in _RAW_DIRS + _NORM_DIRS + _ASSET_DIRS + _META_DIRS + _CURATED_DIRS:
         backend.ensure_dir(d)
 
 

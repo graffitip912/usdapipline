@@ -5,11 +5,17 @@ from __future__ import annotations
 from functools import lru_cache
 
 from common.data_access import DataBackend, get_backend
+from common.verification import VerificationStore
 
 
 @lru_cache(maxsize=1)
 def get_data_backend() -> DataBackend:
     return get_backend()
+
+
+@lru_cache(maxsize=1)
+def get_verification_store() -> VerificationStore:
+    return VerificationStore(get_data_backend())
 
 
 # USER-CONFIG: Phase 2 auth middleware injection point

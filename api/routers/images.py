@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.deps import get_data_backend
+from common.curation import import_curation_decisions, get_curation_metadata
 from common.data_access import DataBackend
 
 log = logging.getLogger(__name__)
@@ -165,6 +166,27 @@ async def update_decision(
 
     backend.write_json(curation_path, curation)
     return {"status": "updated", "image_id": image_id, "keep": str(body.keep)}
+
+
+class CurationImport(BaseModel):
+    decisions: list[dict[str, Any]]
+    curator: str = "user"
+
+
+@router.post("/curation/import")
+async def import_curation(body: CurationImport) -> dict[str, Any]:
+    """Import curation decisions and generate ML-ready dataset."""
+    result = import_curation_decisions(body.decisions, body.curator)
+    return {"status": "imported", **result}
+
+
+@router.get("/curation/metadata")
+async def curation_metadata() -> dict[str, Any]:
+    """Get curated dataset metadata (stats, schema, version)."""
+    meta = get_curation_metadata()
+    if not meta:
+        raise HTTPException(404, "No curated dataset found")
+    return meta
 
 
 def _check_archive_path(backend: DataBackend, img: dict) -> str | None:

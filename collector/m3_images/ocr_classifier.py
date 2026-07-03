@@ -104,3 +104,53 @@ def extract_section_header(page_text: str) -> str | None:
         if re.match(r"^[A-Z][A-Za-z\s,&-]+$", stripped) and len(stripped) < 60:
             return stripped
     return None
+
+
+def parse_wwcb_toc(page1_text: str) -> dict[int, str]:
+    """Parse Table of Contents from WWCB PDF page 1.
+
+    Returns {page_number: section_title} mapping.
+    """
+    toc: dict[int, str] = {}
+    lines = page1_text.split("\n")
+
+    in_contents = False
+    content_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower() == "contents":
+            in_contents = True
+            continue
+        if in_contents:
+            if "WEEKLY WEATHER" in stripped or "HIGHLIGHTS" in stripped:
+                break
+            if stripped:
+                content_lines.append(stripped)
+
+    buffer = ""
+    for line in content_lines:
+        match = re.search(r"\.{2,}\s*(\d+)\s*$", line)
+        if match:
+            page_num = int(match.group(1))
+            title = re.sub(r"\s*\.{2,}\s*\d+\s*$", "", buffer + " " + line).strip()
+            title = re.sub(r"\s+", " ", title)
+            if title and page_num > 0:
+                toc[page_num] = title
+            buffer = ""
+        else:
+            buffer += " " + line if buffer else line
+
+    return toc
+
+
+def lookup_toc_section(toc: dict[int, str], page: int) -> str | None:
+    """Find the TOC section title for a given page number.
+
+    Uses the nearest preceding TOC entry (sections span multiple pages).
+    """
+    if not toc:
+        return None
+    candidates = [p for p in toc if p <= page]
+    if not candidates:
+        return None
+    return toc[max(candidates)]

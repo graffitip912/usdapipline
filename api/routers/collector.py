@@ -7,8 +7,9 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks
 
-from collector.run import SOURCES, run_source
+from collector.run import MANIFEST_SOURCES, SOURCES, run_source
 from common import manifest
+from api.deps import get_verification_store
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/collector", tags=["collector"])
@@ -16,20 +17,57 @@ router = APIRouter(prefix="/api/collector", tags=["collector"])
 
 @router.get("/status")
 async def collector_status() -> list[dict[str, Any]]:
-    """All collector statuses from the manifest."""
-    all_status = manifest.get_all_status()
-    source_keys = set(SOURCES.keys())
-    known = {s["source"] for s in all_status}
-    for key in source_keys:
-        if key not in known and f"USDA_{key.upper()}" not in known:
-            all_status.append({
+    """One canonical status entry per run key.
+
+    The manifest stores two spellings per source (collector SOURCE constant
+    for successes, run key for failure attempts) — merge both so each of the
+    9 sources appears exactly once. Verification records are keyed by run key.
+    """
+    df = manifest.read()
+    all_status: list[dict[str, Any]] = []
+
+    for key in SOURCES:
+        names = {key, MANIFEST_SOURCES[key]}
+        rows = df[df["source"].isin(names)] if not df.empty else df
+
+        if rows is None or rows.empty:
+            entry: dict[str, Any] = {
                 "source": key,
                 "status": "never_run",
                 "last_success": None,
                 "last_attempt": None,
                 "retry_count": 0,
                 "error_message": "",
-            })
+            }
+        else:
+            sorted_rows = rows.sort_values("collected_at", ascending=False)
+            latest = sorted_rows.iloc[0]
+            success_rows = sorted_rows[sorted_rows["status"] == "success"]
+            entry = {
+                "source": key,
+                "status": latest["status"],
+                "last_success": success_rows.iloc[0]["collected_at"] if not success_rows.empty else None,
+                "last_attempt": latest["collected_at"],
+                "retry_count": int(latest.get("retry_count", 0) or 0),
+                "error_message": latest.get("error_message", "") or "",
+            }
+        all_status.append(entry)
+
+    try:
+        store = get_verification_store()
+        for entry in all_status:
+            v_status = store.get_source_verification_status(entry["source"])
+            entry["verification_status"] = v_status["verification_status"]
+            entry["last_verification_failure"] = v_status["last_verification_failure"]
+            entry["open_change_requests"] = v_status["open_change_requests"]
+            entry["unresolved_failures"] = v_status["unresolved_failures"]
+    except Exception:
+        for entry in all_status:
+            entry.setdefault("verification_status", "not_verified")
+            entry.setdefault("last_verification_failure", None)
+            entry.setdefault("open_change_requests", 0)
+            entry.setdefault("unresolved_failures", 0)
+
     return all_status
 
 

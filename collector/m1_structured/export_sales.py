@@ -24,7 +24,6 @@ from tenacity import (
 )
 
 from common import manifest
-from common.http import fetch
 from common.schema import validate_and_stamp
 from common.storage import RAW_DIR, ensure_dirs, norm_path, sha256_bytes, sha256_file
 
@@ -57,7 +56,12 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
-_RETRY_WAIT_SECONDS = [60, 300, 600, 900, 1800]
+# USER-CONFIG: ESR retry waits (seconds). Kept short so a FAS server outage
+# blocks a pipeline run for minutes, not hours (2026-07-02: old schedule
+# 1m/5m/10m/15m x5 attempts made a single run take 5+ hours).
+# N attempts sleep N-1 times, so len(waits) == attempts - 1.
+_RETRY_WAIT_SECONDS = [30, 60]
+_RETRY_MAX_ATTEMPTS = 3
 
 
 def _wait_schedule(retry_state):
@@ -68,12 +72,12 @@ def _wait_schedule(retry_state):
 @retry(
     retry=retry_if_exception(_is_retryable),
     wait=_wait_schedule,
-    stop=stop_after_attempt(5),
+    stop=stop_after_attempt(_RETRY_MAX_ATTEMPTS),
     before_sleep=lambda rs: log.warning(
-        "ESR: retry %d/%d for %s in %dm (reason: %s)",
-        rs.attempt_number, 5,
+        "ESR: retry %d/%d for %s in %ds (reason: %s)",
+        rs.attempt_number, _RETRY_MAX_ATTEMPTS,
         rs.args[0] if rs.args else "?",
-        _RETRY_WAIT_SECONDS[min(rs.attempt_number - 1, len(_RETRY_WAIT_SECONDS) - 1)] // 60,
+        _RETRY_WAIT_SECONDS[min(rs.attempt_number - 1, len(_RETRY_WAIT_SECONDS) - 1)],
         rs.outcome.exception(),
     ),
     reraise=True,
@@ -214,7 +218,7 @@ def collect(since: int = 2010, force: bool = False) -> None:
     if all_frames:
         merged = pd.concat(all_frames, ignore_index=True)
         merged = merged.sort_values("report_date").drop_duplicates(
-            subset=["commodity", "obs_date", "metric", "region"],
+            subset=["commodity", "obs_date", "metric", "region", "marketing_year"],
             keep="last",
         )
         merged = validate_and_stamp(merged, SOURCE)
