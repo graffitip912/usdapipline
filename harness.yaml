@@ -23,7 +23,7 @@ dev_workflow:
 runtime_rules:
   schedule_triggers:
     # USER-CONFIG: 수집 스케줄 (cron 형식)
-    weekly: "0 6 * * 1"     # 매주 월요일 06:00 UTC
+    weekly: "0 6 * * 5"     # 매주 금요일 06:00 UTC (WWCB 화/수, ESR·GTR 목 발행 후 당주 수집)
     monthly: "0 6 15 * *"   # 매월 15일 06:00 UTC
 
   retry_policy:

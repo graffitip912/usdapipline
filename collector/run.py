@@ -2,7 +2,7 @@
 
 Usage:
     python -m collector.run --source all --since 2010
-    python -m collector.run --source weekly          # cron: every Monday
+    python -m collector.run --source weekly          # cron: every Friday
     python -m collector.run --source monthly         # cron: 15th of each month
     python -m collector.run --source gtr
     python -m collector.run --source quickstats --since 2020

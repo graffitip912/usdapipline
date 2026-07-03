@@ -21,7 +21,7 @@ _HARNESS_PATH = _PROJECT_ROOT / "harness.yaml"
 _DEFAULTS: dict[str, Any] = {
     "runtime_rules": {
         "schedule_triggers": {
-            "weekly": "0 6 * * 1",
+            "weekly": "0 6 * * 5",
             "monthly": "0 6 15 * *",
         },
         "retry_policy": {
