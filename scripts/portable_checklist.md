@@ -24,9 +24,13 @@ git clone https://github.com/graffitip912/usdapipline.git usda-grain-pipeline
 | **필수** | `C:\workspace\predict-models\` 전체 | **git 저장소 아님** — 설계 기준서 포함 |
 | **필수** | `C:\Users\<user>\.claude\projects\C--workspace\memory\` | Claude Code 지속 메모리 (작업 지침·프로젝트 기억 7건) |
 
-> ⚠️ 경로 유지: 새 머신에서도 작업 폴더를 **`C:\workspace`** 로 유지할 것.
-> Claude 메모리 디렉토리가 프로젝트 경로로 키잉(`C--workspace`)되므로 경로가 다르면 메모리가 연결되지 않음.
-> 메모리 복사 위치도 동일하게 `C:\Users\<새유저>\.claude\projects\C--workspace\memory\`.
+> ⚠️ 작업 폴더 경로: **`C:\workspace` 유지가 가장 간단**하지만, 다른 경로(예: `C:\Users\<user>\Documents\Workplace`)도 가능.
+> 코드는 전부 상대경로 해석(`Path(__file__)` 기반)이라 경로와 무관하게 동작함 (2026-07-03 grep 검증).
+> 경로를 바꾸면 달라지는 것은 **Claude 메모리 키잉** 하나뿐:
+> 메모리 디렉토리는 프로젝트 경로를 키로 사용 (`C:\workspace` → `C--workspace`, 영숫자 외 문자 → `-`).
+> **확실한 배치 방법**: 새 작업 폴더에서 Claude Code를 한 번 실행 → `dir %USERPROFILE%\.claude\projects\` 에
+> 새로 생긴 폴더명 확인 → 그 폴더의 `memory\` 하위에 메모리 파일 복사.
+> (migration-bundle의 `restore.ps1 -Workspace <경로>`가 키를 자동 계산해 배치하며, 실행 후 위 방법으로 검증할 것)
 
 > 권장: predict-client-dev / predict-models도 이전 후 git init + 원격 push (현재 git 미관리 상태가 유실 리스크).
 
