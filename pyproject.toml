@@ -32,5 +32,8 @@ ml = [
     "accelerate>=0.28",
 ]
 
+[tool.setuptools.packages.find]
+include = ["collector*", "common*", "api*"]
+
 [project.scripts]
 usda-collect = "collector.run:main"
