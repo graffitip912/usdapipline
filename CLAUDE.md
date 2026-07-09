@@ -36,6 +36,10 @@ USDA APIs/PDFs → collector/ (9 sources) → data/ (parquet/json/images)
 - **외부 LLM API 사용 금지** — 이미지 분류는 규칙+해싱+Tesseract OCR
 - **튜닝 값에 `# USER-CONFIG:` 주석** — `grep -r "USER-CONFIG"` 으로 검색
 - **`data/` 디렉토리는 gitignore** — 런타임 데이터만 저장
+- **증분 쓰기 4원칙** (2026-07-09 데이터 유실 사고 2건 재발 방지): ① 기존 파일 병합 보존
+  ② 신규 행 스탬프(ingested_at 등)는 concat 직후 부여 ③ dedup 키에 식별 차원 전체 포함
+  (region 등) + `kind="stable"` 정렬 ④ tmp→`os.replace` 원자적 교체. 병합용 읽기 실패 시
+  **쓰기 중단** (새 데이터만으로 덮어쓰기 금지)
 
 ## Structure
 

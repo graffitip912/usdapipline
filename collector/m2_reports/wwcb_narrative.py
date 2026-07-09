@@ -15,6 +15,7 @@ raw PDF 46부(재다운로드 없음).
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -23,7 +24,7 @@ import fitz  # PyMuPDF
 
 from common import manifest
 from common.data_access import get_backend
-from common.storage import RAW_DIR, ensure_dirs, sha256_file
+from common.storage import RAW_DIR, ensure_dirs, sha256_bytes
 
 from collector.m3_images.ocr_classifier import lookup_toc_section, parse_wwcb_toc
 
@@ -94,22 +95,27 @@ def extract_narrative(pdf_path: Path) -> dict:
 
 
 def collect(since: int = 2010, force: bool = False) -> None:
-    """raw/wwcb/*.pdf 전체에서 본문 JSON을 생성한다 (증분: 기존 JSON은 건너뜀)."""
+    """raw/wwcb/*.pdf에서 본문 JSON을 생성한다 (since 연도 이후, 증분: 기존 JSON 건너뜀)."""
     ensure_dirs()
     backend = get_backend()
     raw_dir = RAW_DIR / "wwcb"
-    pdfs = sorted(raw_dir.glob("wwcb_*.pdf"))
+    # as-is: since 파라미터 미사용 (2026-07-09 점검)
+    # to-be: 연도 필터 적용 — run.py 인터페이스와 의미 일치
+    pdfs = [p for p in sorted(raw_dir.glob("wwcb_*.pdf"))
+            if p.stem.replace("wwcb_", "")[:4].isdigit()
+            and int(p.stem.replace("wwcb_", "")[:4]) >= since]
     if not pdfs:
-        log.warning("WWCB narrative: raw PDF 없음 (%s)", raw_dir)
+        log.warning("WWCB narrative: raw PDF 없음 (%s, since=%d)", raw_dir, since)
         return
 
-    existing = set(backend.list_files(OUT_REL_DIR, "*.json"))
+    # as-is: list_files의 역슬래시 경로와 슬래시 rel_out 비교 — 죽은 조건 + O(N×M) 오탐 여지
+    # to-be: basename 집합 비교 (경로 구분자 무관, 정확 일치)
+    existing_names = {Path(f).name for f in backend.list_files(OUT_REL_DIR, "*.json")}
     done = 0
     skipped = 0
     for pdf in pdfs:
         rel_out = f"{OUT_REL_DIR}/{pdf.stem}.json"
-        if not force and any(rel_out.endswith(name) or name.endswith(f"{pdf.stem}.json")
-                             for name in existing):
+        if not force and f"{pdf.stem}.json" in existing_names:
             skipped += 1
             continue
         try:
@@ -119,12 +125,17 @@ def collect(since: int = 2010, force: bool = False) -> None:
             continue
 
         backend.write_json(rel_out, data)
+        # as-is: JSON 산출물 경로에 원본 PDF 해시 기록 — 산출물·해시 불일치
+        # to-be: 산출물(JSON 직렬화) 자체의 해시 기록
+        payload_hash = sha256_bytes(
+            json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        )
         manifest.upsert(
             source=SOURCE,
             artifact_type="normalized_json",
             period=f"week_{data['date']}",
             path=Path(rel_out),
-            sha256=sha256_file(pdf),
+            sha256=payload_hash,
         )
         done += 1
         log.info("WWCB narrative: %s (%d sections)", pdf.stem, len(data["sections"]))

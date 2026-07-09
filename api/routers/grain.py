@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_data_backend
 from common.data_access import DataBackend
@@ -105,6 +105,16 @@ def _filter_by_date(
 ) -> pd.DataFrame:
     if "obs_date" not in df.columns:
         return df
+    # as-is: 파싱 불가 from/to 문자열 → pandas 비교 예외 → 500 (2026-07-09 점검, 전 엔드포인트 공통)
+    # to-be: 사전 검증 후 422 반환
+    for label, value in (("from", from_date), ("to", to_date)):
+        if value:
+            try:
+                pd.Timestamp(value)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=422, detail=f"invalid {label} date: {value!r} (YYYY-MM-DD)"
+                )
     if from_date:
         df = df[df["obs_date"] >= from_date]
     if to_date:
@@ -112,8 +122,17 @@ def _filter_by_date(
     return df.sort_values("obs_date")
 
 
-def _to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
-    columns = ["obs_date", "commodity", "metric", "value", "unit", "source", "report_date"]
+_DEFAULT_RECORD_COLUMNS = [
+    "obs_date", "commodity", "metric", "value", "unit", "source", "report_date",
+]
+
+
+def _to_records(
+    df: pd.DataFrame, columns: list[str] | None = None
+) -> list[dict[str, Any]]:
+    # as-is: fieldwork 엔드포인트가 날짜 직렬화 로직을 복제 (2026-07-09 점검)
+    # to-be: columns 파라미터화로 단일 직렬화 경로 공유
+    columns = columns or _DEFAULT_RECORD_COLUMNS
     available = [c for c in columns if c in df.columns]
     result = df[available].copy()
     for col in result.select_dtypes(include=["datetime64"]).columns:
@@ -133,7 +152,12 @@ async def grain_fieldwork(
     QuickStats fieldwork_days 프로파일 데이터. obs_date는 해당 주(week)의 월요일.
     predict-models TB2 v2가 WWCB 지도 추출값의 자동 대조 정답으로 사용.
     """
-    df = _load_all_grain(backend)
+    # as-is: 전 소스 parquet 로드 후 필터 + 직렬화 복제 (2026-07-09 점검)
+    # to-be: quickstats.parquet만 로드(FIELDWORK 유일 소스) + _to_records 공유
+    try:
+        df = backend.read_parquet("normalized/structured/quickstats.parquet")
+    except Exception:
+        return []
     if df.empty:
         return []
     df = df[(df["commodity"] == "FIELDWORK")
@@ -141,12 +165,9 @@ async def grain_fieldwork(
     if state:
         df = df[df["region"] == state.upper()]
     df = _filter_by_date(df, from_date, to_date)
-    columns = ["obs_date", "region", "metric", "value", "unit", "report_date"]
-    available = [c for c in columns if c in df.columns]
-    result = df[available].copy()
-    for col in result.select_dtypes(include=["datetime64"]).columns:
-        result[col] = result[col].dt.strftime("%Y-%m-%d")
-    return result.to_dict("records")
+    return _to_records(
+        df, columns=["obs_date", "region", "metric", "value", "unit", "report_date"]
+    )
 
 
 @router.get("/grain/prices")

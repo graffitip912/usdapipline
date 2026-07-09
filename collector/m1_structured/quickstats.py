@@ -11,7 +11,6 @@ import os
 import re
 import time
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -369,7 +368,16 @@ def collect(since: int = 2010, force: bool = False) -> None:
                 return
             if not existing.empty:
                 merged = pd.concat([existing, merged], ignore_index=True)
-        merged = merged.sort_values("report_date").drop_duplicates(
+                # as-is: concat 후 신규 행 ingested_at=NaT → validate_and_stamp가
+                #        기존 컬럼은 채우지 않아 pandera 검증에서 신규 행 전량 드롭 (2026-07-09 점검 P1)
+                # to-be: concat 직후 신규 행에 스탬프 부여 — 증분 병합 시 신규 데이터 보존
+                if "ingested_at" in merged.columns:
+                    merged["ingested_at"] = merged["ingested_at"].fillna(
+                        pd.Timestamp.now(tz="UTC")
+                    )
+        # as-is: 기본 quicksort(비안정) → report_date 동률 시 keep="last"가 구/신 임의 선택
+        # to-be: 안정 정렬 — 동률 시 concat 순서(기존→신규) 보존되어 신규가 last (점검 P2)
+        merged = merged.sort_values("report_date", kind="stable").drop_duplicates(
             subset=["commodity", "obs_date", "metric", "region"], keep="last",
         )
         merged = validate_and_stamp(merged, SOURCE)

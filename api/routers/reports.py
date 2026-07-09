@@ -29,9 +29,12 @@ def list_reports() -> dict:
     """사용 가능한 리포트 회차 목록."""
     backend = get_backend()
     files = backend.list_files(_REL_DIR, "wwcb_*.json")
+    # as-is: 전역 replace + 날짜 형식 미검증 — 비정상 파일명도 목록에 포함 (2026-07-09 점검)
+    # to-be: stem에서 날짜 추출 후 YYYYMMDD 검증 통과분만 노출
     dates = sorted(
-        name.replace("wwcb_", "").replace(".json", "")
-        for name in (f.split("/")[-1].split("\\")[-1] for f in files)
+        stem[len("wwcb_"):]
+        for stem in (f.split("/")[-1].split("\\")[-1].removesuffix(".json") for f in files)
+        if stem.startswith("wwcb_") and _DATE_RE.match(stem[len("wwcb_"):])
     )
     return {"kinds": ["wwcb"], "wwcb": {"count": len(dates), "dates": dates}}
 
@@ -46,18 +49,25 @@ def get_wwcb_report(
         raise HTTPException(status_code=422, detail="date must be YYYYMMDD")
 
     backend = get_backend()
+    # as-is: FileNotFoundError만 처리 — 손상 JSON/키 누락 시 500 (2026-07-09 점검)
+    # to-be: 부재는 404, 손상은 503으로 원인 명시 (조용한 실패 금지)
     try:
         data = backend.read_json(f"{_REL_DIR}/wwcb_{date}.json")
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"wwcb report not found: {date}")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail=f"wwcb report unreadable ({date}): {exc}"
+        )
 
     if q:
         needle = q.lower()
         data = {
             **data,
             "sections": [
-                s for s in data["sections"]
-                if needle in s["title"].lower() or needle in s["text"].lower()
+                s for s in data.get("sections", [])
+                if needle in s.get("title", "").lower()
+                or needle in s.get("text", "").lower()
             ],
             "filtered_by": q,
         }
