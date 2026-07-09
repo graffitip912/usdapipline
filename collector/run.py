@@ -52,6 +52,7 @@ SOURCES = {
     "wwcb": ("collector.m2_reports.wwcb", "WWCB PDF", "weekly"),
     "wasde_pdf": ("collector.m2_reports.wasde_pdf", "WASDE PDF archive", "monthly"),
     "wwcb_images": ("collector.m3_images.wwcb_images", "WWCB image extraction", "weekly"),
+    "wwcb_narrative": ("collector.m2_reports.wwcb_narrative", "WWCB narrative text", "weekly"),
 }
 
 # Manifest SOURCE constant per run key (each collector module's SOURCE).
@@ -67,6 +68,7 @@ MANIFEST_SOURCES = {
     "wwcb": "USDA_WWCB",
     "wasde_pdf": "USDA_WASDE_PDF",
     "wwcb_images": "USDA_WWCB_IMAGES",
+    "wwcb_narrative": "USDA_WWCB_NARRATIVE",
 }
 
 log = logging.getLogger("collector")

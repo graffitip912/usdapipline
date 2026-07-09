@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from api.routers import collector, grain, images, schedule, verification
+from api.routers import collector, grain, images, reports, schedule, verification
 from api.scheduler import get_scheduler, setup_default_jobs
 from common.storage import ensure_dirs
 
@@ -68,6 +68,7 @@ OPENAPI_TAGS = [
     {"name": "grain", "description": "정규화된 곡물 데이터 서빙 — 가격, 수급(supply), 재고(inventory), GTR 지수. commodity=corn|soybean|wheat."},
     {"name": "images", "description": "WWCB 추출 이미지 목록/파일/메타데이터, 캡션·판정 수정, 큐레이션 결과 import."},
     {"name": "schedule", "description": "APScheduler 크론 스케줄 조회·변경·일시정지·재개 (weekly/monthly 그룹)."},
+    {"name": "reports", "description": "리포트 본문 서빙 — WWCB 내러티브 섹션 텍스트 (predict-models TB2 v2 report_context 소스)."},
     {"name": "verification", "description": "AC-3/5/6 데이터 검증 게이트 — 검증 이력(as-is→to-be), 사용자 리뷰(승인 게이트), 변경 요청 루프(생성→적용→재수집→검증, 최대 10회), 데이터 미리보기."},
     {"name": "health", "description": "서버 헬스 체크."},
 ]
@@ -92,6 +93,7 @@ app.add_middleware(
 app.include_router(collector.router)
 app.include_router(grain.router)
 app.include_router(images.router)
+app.include_router(reports.router)
 app.include_router(schedule.router)
 app.include_router(verification.router)
 
