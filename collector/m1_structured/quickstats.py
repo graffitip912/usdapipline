@@ -103,6 +103,18 @@ QUERY_PROFILES: list[dict] = [
         },
         "metric_prefix": "area_harvested",
     },
+    # as-is: 곡물 3종만 수집 — WWCB 노동가능일수 지도의 정답 데이터 부재
+    # to-be: FIELDWORK 프로파일 추가 — predict-models TB2 v2 이미지 추출값 자동 대조용
+    {
+        "name": "fieldwork_days",
+        "params": {
+            "source_desc": "SURVEY",
+            "statisticcat_desc": "DAYS SUITABLE",
+            "freq_desc": "WEEKLY",
+        },
+        "metric_prefix": "fieldwork",
+        "commodities": ["FIELDWORK"],  # 곡물 아님 — 프로파일 전용 commodity
+    },
 ]
 
 
@@ -277,7 +289,7 @@ def collect(since: int = 2010, force: bool = False) -> None:
     all_frames: list[pd.DataFrame] = []
 
     for profile in QUERY_PROFILES:
-        for commodity in COMMODITIES:
+        for commodity in profile.get("commodities", COMMODITIES):
             try:
                 raw_path = (
                     RAW_DIR / "quickstats"
@@ -337,8 +349,18 @@ def collect(since: int = 2010, force: bool = False) -> None:
 
     if all_frames:
         merged = pd.concat(all_frames, ignore_index=True)
+        # as-is: 새 프레임만으로 파일 교체 — 캐시 스킵된 프로파일 데이터 유실 (2026-07-09 사고),
+        #        dedup 키에 region 누락 — 주(state)별 행이 1행으로 붕괴
+        # to-be: 기존 parquet과 병합 보존 + region 포함 dedup (새 데이터 우선)
+        if norm_file.exists():
+            try:
+                existing = pd.read_parquet(norm_file)
+                if not existing.empty:
+                    merged = pd.concat([existing, merged], ignore_index=True)
+            except Exception:
+                log.exception("QuickStats: 기존 parquet 읽기 실패 — 새 데이터만 기록")
         merged = merged.sort_values("report_date").drop_duplicates(
-            subset=["commodity", "obs_date", "metric"], keep="last",
+            subset=["commodity", "obs_date", "metric", "region"], keep="last",
         )
         merged = validate_and_stamp(merged, SOURCE)
         merged.to_parquet(norm_file, index=False, compression="zstd")

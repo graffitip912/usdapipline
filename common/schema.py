@@ -13,7 +13,9 @@ from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
-VALID_COMMODITIES = ["CORN", "SOYBEAN", "WHEAT", "ALL_GRAINS"]
+# as-is: 곡물 3종 + 합산 / to-be: FIELDWORK 추가 (노동가능일수 — 곡물 아닌 환경 지표,
+# predict-models TB2 v2 이미지 추출값 자동 대조용 정답 데이터)
+VALID_COMMODITIES = ["CORN", "SOYBEAN", "WHEAT", "ALL_GRAINS", "FIELDWORK"]
 
 
 # ---------------------------------------------------------------------------

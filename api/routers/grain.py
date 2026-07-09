@@ -121,6 +121,34 @@ def _to_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return result.to_dict("records")
 
 
+@router.get("/grain/fieldwork")
+async def grain_fieldwork(
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    state: str | None = Query(None, description="주 코드 (예: IA). 생략 시 전체"),
+    backend: DataBackend = Depends(get_data_backend),
+) -> list[dict[str, Any]]:
+    """주(state)별 노동 가능 일수 (FIELDWORK — DAYS SUITABLE, days/week).
+
+    QuickStats fieldwork_days 프로파일 데이터. obs_date는 해당 주(week)의 월요일.
+    predict-models TB2 v2가 WWCB 지도 추출값의 자동 대조 정답으로 사용.
+    """
+    df = _load_all_grain(backend)
+    if df.empty:
+        return []
+    df = df[(df["commodity"] == "FIELDWORK")
+            & df["metric"].str.contains("days_week", na=False)]
+    if state:
+        df = df[df["region"] == state.upper()]
+    df = _filter_by_date(df, from_date, to_date)
+    columns = ["obs_date", "region", "metric", "value", "unit", "report_date"]
+    available = [c for c in columns if c in df.columns]
+    result = df[available].copy()
+    for col in result.select_dtypes(include=["datetime64"]).columns:
+        result[col] = result[col].dt.strftime("%Y-%m-%d")
+    return result.to_dict("records")
+
+
 @router.get("/grain/prices")
 async def grain_prices(
     commodity: str = Query(..., description="corn, soybeans, or wheat"),
