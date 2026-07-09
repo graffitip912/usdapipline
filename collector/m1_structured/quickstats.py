@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -349,21 +350,32 @@ def collect(since: int = 2010, force: bool = False) -> None:
 
     if all_frames:
         merged = pd.concat(all_frames, ignore_index=True)
-        # as-is: 새 프레임만으로 파일 교체 — 캐시 스킵된 프로파일 데이터 유실 (2026-07-09 사고),
-        #        dedup 키에 region 누락 — 주(state)별 행이 1행으로 붕괴
-        # to-be: 기존 parquet과 병합 보존 + region 포함 dedup (새 데이터 우선)
+        # as-is: 새 프레임만으로 파일 교체 — 캐시 스킵된 프로파일 데이터 유실 (2026-07-09 사고 1),
+        #        dedup 키에 region 누락 — 주(state)별 행이 1행으로 붕괴,
+        #        읽기 실패 시 새 데이터만 기록하는 폴백 — 동시 읽기 경합 시 재유실 (2026-07-09 사고 2)
+        # to-be: 기존 parquet 병합 보존 + region 포함 dedup + 읽기 실패 시 쓰기 중단 + 원자적 교체
         if norm_file.exists():
-            try:
-                existing = pd.read_parquet(norm_file)
-                if not existing.empty:
-                    merged = pd.concat([existing, merged], ignore_index=True)
-            except Exception:
-                log.exception("QuickStats: 기존 parquet 읽기 실패 — 새 데이터만 기록")
+            existing = None
+            for attempt in range(3):  # 동시 읽기 경합 재시도
+                try:
+                    existing = pd.read_parquet(norm_file)
+                    break
+                except Exception:
+                    time.sleep(0.5 * (attempt + 1))
+            if existing is None:
+                log.error(
+                    "QuickStats: 기존 parquet 읽기 실패 — 데이터 유실 방지를 위해 쓰기 중단"
+                )
+                return
+            if not existing.empty:
+                merged = pd.concat([existing, merged], ignore_index=True)
         merged = merged.sort_values("report_date").drop_duplicates(
             subset=["commodity", "obs_date", "metric", "region"], keep="last",
         )
         merged = validate_and_stamp(merged, SOURCE)
-        merged.to_parquet(norm_file, index=False, compression="zstd")
+        tmp_file = norm_file.with_suffix(".parquet.tmp")
+        merged.to_parquet(tmp_file, index=False, compression="zstd")
+        os.replace(tmp_file, norm_file)  # 원자적 교체 — 부분 쓰기 노출 방지
         manifest.upsert(
             source=SOURCE,
             artifact_type="normalized_parquet",
