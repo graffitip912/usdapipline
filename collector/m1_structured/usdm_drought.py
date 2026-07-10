@@ -18,7 +18,7 @@ from datetime import datetime
 import pandas as pd
 
 from common import manifest
-from common.http import fetch_json
+from common.http import get_session
 from common.schema import validate_and_stamp
 from common.storage import ensure_dirs, norm_path, sha256_file
 
@@ -56,12 +56,16 @@ def collect(since: int = 2010, force: bool = False) -> None:
     failed: list[str] = []
     for st, fips in STATE_FIPS.items():
         try:
-            rows = fetch_json(
+            # Accept 헤더 없으면 XML 반환 (실측) — JSON 명시 필수
+            resp = get_session().get(
                 API,
                 params={"aoi": str(fips), "startdate": start, "enddate": end,
                         "statisticsType": "1"},
+                headers={"Accept": "application/json"},
                 timeout=120,
             )
+            resp.raise_for_status()
+            rows = resp.json()
         except Exception:
             log.exception("USDM: %s(%d) 조회 실패", st, fips)
             failed.append(st)
