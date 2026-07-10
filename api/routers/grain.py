@@ -122,8 +122,9 @@ def _filter_by_date(
     return df.sort_values("obs_date")
 
 
+# region 포함 — GTR price_spread는 노선(IL–Gulf 등) 차원이 식별에 필수 (2026-07-11 시장구조)
 _DEFAULT_RECORD_COLUMNS = [
-    "obs_date", "commodity", "metric", "value", "unit", "source", "report_date",
+    "obs_date", "commodity", "region", "metric", "value", "unit", "source", "report_date",
 ]
 
 
