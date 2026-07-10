@@ -170,6 +170,36 @@ async def grain_fieldwork(
     )
 
 
+@router.get("/grain/state-metrics")
+async def grain_state_metrics(
+    metric: str = Query(..., description="정규화 metric 전체 이름 (예: progress__corn_progress_measured_in_pct_planted)"),
+    from_date: str | None = Query(None, alias="from"),
+    to_date: str | None = Query(None, alias="to"),
+    state: str | None = Query(None, description="주 코드 (예: IA). 생략 시 전체"),
+    backend: DataBackend = Depends(get_data_backend),
+) -> list[dict[str, Any]]:
+    """주(state) 단위 지표 시계열 — 지도 시각화·유사 연도 비교용.
+
+    as-is: progress/condition 주별 데이터가 수집만 되고 REST 미노출 (지도분석 v2 ⓐ)
+    to-be: metric 이름으로 quickstats 주별 시계열 서빙 (predict-models map-data 원천)
+    """
+    try:
+        df = backend.read_parquet("normalized/structured/quickstats.parquet")
+    except Exception:
+        return []
+    if df.empty:
+        return []
+    # region 2글자 중 'US'는 전국 집계 — 주(state) 목록에서 제외
+    df = df[(df["metric"] == metric) & (df["region"].str.len() == 2)
+            & (df["region"] != "US")]
+    if state:
+        df = df[df["region"] == state.upper()]
+    df = _filter_by_date(df, from_date, to_date)
+    return _to_records(
+        df, columns=["obs_date", "region", "metric", "value", "unit"]
+    )
+
+
 @router.get("/grain/prices")
 async def grain_prices(
     commodity: str = Query(..., description="corn, soybeans, or wheat"),
