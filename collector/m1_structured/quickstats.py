@@ -115,6 +115,18 @@ QUERY_PROFILES: list[dict] = [
         "metric_prefix": "fieldwork",
         "commodities": ["FIELDWORK"],  # 곡물 아님 — 프로파일 전용 commodity
     },
+    # to-be: 수분도(표토/심토) — 지도분석 v2 지표 (2026-07-10 사용자 지시)
+    {
+        "name": "soil_moisture",
+        "params": {
+            "source_desc": "SURVEY",
+            "statisticcat_desc": "MOISTURE",
+            "freq_desc": "WEEKLY",
+            "agg_level_desc": "STATE",  # 카운티 포함 시 연 단위도 50k 초과(413)
+        },
+        "metric_prefix": "soil",
+        "commodities": ["SOIL"],
+    },
 ]
 
 

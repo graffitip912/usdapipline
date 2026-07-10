@@ -15,7 +15,8 @@ log = logging.getLogger(__name__)
 
 # as-is: 곡물 3종 + 합산 / to-be: FIELDWORK 추가 (노동가능일수 — 곡물 아닌 환경 지표,
 # predict-models TB2 v2 이미지 추출값 자동 대조용 정답 데이터)
-VALID_COMMODITIES = ["CORN", "SOYBEAN", "WHEAT", "ALL_GRAINS", "FIELDWORK"]
+# SOIL(수분도)·DROUGHT(가뭄도 USDM)는 지도분석 v2 지표 (2026-07-10)
+VALID_COMMODITIES = ["CORN", "SOYBEAN", "WHEAT", "ALL_GRAINS", "FIELDWORK", "SOIL", "DROUGHT"]
 
 
 # ---------------------------------------------------------------------------
