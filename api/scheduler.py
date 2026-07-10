@@ -52,11 +52,16 @@ def _parse_cron(expr: str) -> dict[str, str]:
 
 
 def _run_collection_sync(source_arg: str) -> None:
+    from datetime import datetime
     from collector.run import run_source, _resolve_targets
     targets = _resolve_targets(source_arg)
+    # as-is: 기본 since(2010)로 전체 범위 재조회 — 대형 소스(SOIL 등) 타임아웃 위험
+    # to-be: 스케줄 배치는 당해 연도만 증분 갱신 (초기 백필은 CLI --since로 1회 수행)
+    #        병합 보존 dedup이 최신 주차 데이터를 기존 이력에 합류시킴 (2026-07-10 사용자 지시)
+    since = datetime.utcnow().year  # USER-CONFIG: 주간 배치 증분 범위
     for source_key in targets:
-        result = run_source(source_key)
-        log.info("Scheduled collection %s: %s", source_key, result["status"])
+        result = run_source(source_key, since=since)
+        log.info("Scheduled collection %s: %s (since=%d)", source_key, result["status"], since)
 
 
 def get_scheduler() -> AsyncIOScheduler:

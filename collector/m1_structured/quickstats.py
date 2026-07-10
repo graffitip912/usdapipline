@@ -62,6 +62,15 @@ QUERY_PROFILES: list[dict] = [
             "freq_desc": "WEEKLY",
         },
         "metric_prefix": "condition",
+        # CORN/WHEAT 잠복 413 수리: 범주별 분할 조회 (2026-07-10)
+        "split_short_descs": [
+            "{commodity} - CONDITION, MEASURED IN PCT EXCELLENT",
+            "{commodity} - CONDITION, MEASURED IN PCT GOOD",
+            "{commodity} - CONDITION, MEASURED IN PCT FAIR",
+            "{commodity} - CONDITION, MEASURED IN PCT POOR",
+            "{commodity} - CONDITION, MEASURED IN PCT VERY POOR",
+        ],
+        "force_year_chunks": True,
     },
     {
         "name": "production",
@@ -126,6 +135,13 @@ QUERY_PROFILES: list[dict] = [
         },
         "metric_prefix": "soil",
         "commodities": ["SOIL"],
+        "force_year_chunks": True,  # 지표당 ~27k행 단일 응답이 ReadTimeout → 연도 청크
+        # 413 대응: 응답 크기 축소를 위해 지표(short_desc)별 분할 조회
+        "split_short_descs": [
+            f"SOIL, MOISTURE, {depth} - PCT {cat}"
+            for depth in ("TOPSOIL", "SUBSOIL")
+            for cat in ("VERY SHORT", "SHORT", "ADEQUATE", "SURPLUS")
+        ],
     },
 ]
 
@@ -151,7 +167,9 @@ def _get_count(params: dict) -> int:
 
 
 def _api_get(params: dict) -> list[dict]:
-    resp = fetch(API_GET, params={**params, "key": _api_key(), "format": "JSON"})
+    # NASS 대형 응답이 기본 120초를 초과하는 사례(SOIL) — 타임아웃 상향 (2026-07-10)
+    resp = fetch(API_GET, params={**params, "key": _api_key(), "format": "JSON"},
+                 timeout=300)  # USER-CONFIG
     try:
         data = resp.json()
     except ValueError:
@@ -166,7 +184,20 @@ def _api_get(params: dict) -> list[dict]:
 def _fetch_profile_commodity(
     profile: dict, commodity: str, since: int
 ) -> list[dict]:
-    """Fetch one (profile, commodity) pair, splitting by year if >50k rows."""
+    """Fetch one (profile, commodity) pair, splitting by year if >50k rows.
+
+    split_short_descs가 있으면 지표별 분할 조회 — 연 단위 분할로도 413이
+    발생하는 대형 프로파일(SOIL) 대응 (2026-07-10).
+    """
+    if profile.get("split_short_descs"):
+        rows: list[dict] = []
+        for sd in profile["split_short_descs"]:
+            sd = sd.replace("{commodity}", commodity)  # 다중 곡물 프로파일 지원
+            sub = {**profile, "params": {**profile["params"], "short_desc": sd}}
+            sub.pop("split_short_descs")
+            rows.extend(_fetch_profile_commodity(sub, commodity, since))
+        return rows
+
     params = {
         **profile["params"],
         "commodity_desc": commodity,
@@ -182,7 +213,9 @@ def _fetch_profile_commodity(
     if count == 0:
         return []
 
-    if count <= 50_000:
+    # force_year_chunks: 50k 미만이라도 단일 응답이 커서 ReadTimeout 나는
+    # 프로파일(SOIL 등)은 연도 청크로 강제 분할 (2026-07-10)
+    if count <= 50_000 and not profile.get("force_year_chunks"):
         return _api_get(params)
 
     all_rows: list[dict] = []
@@ -299,6 +332,9 @@ def collect(since: int = 2010, force: bool = False) -> None:
     ensure_dirs()
     norm_file = norm_path("quickstats.parquet")
     all_frames: list[pd.DataFrame] = []
+    # as-is: 프로파일 실패가 로그로만 남고 소스 상태는 success — 조용한 실패 (2026-07-10)
+    # to-be: 성공분 저장 후 부분 실패를 예외로 전파 → 수집기 상태에 반영
+    _failures: list[str] = []
 
     for profile in QUERY_PROFILES:
         for commodity in profile.get("commodities", COMMODITIES):
@@ -358,6 +394,7 @@ def collect(since: int = 2010, force: bool = False) -> None:
                 log.exception(
                     "QuickStats: failed %s/%s", profile["name"], commodity
                 )
+                _failures.append(f"{profile['name']}/{commodity}")
 
     if all_frames:
         merged = pd.concat(all_frames, ignore_index=True)
@@ -406,3 +443,8 @@ def collect(since: int = 2010, force: bool = False) -> None:
         log.info("QuickStats: wrote %d normalized records to %s", len(merged), norm_file)
     else:
         log.warning("QuickStats: no records collected")
+
+    if _failures:
+        raise RuntimeError(
+            f"QuickStats 부분 실패: {', '.join(_failures)} (성공 프로파일은 병합 저장됨)"
+        )
