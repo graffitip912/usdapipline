@@ -156,13 +156,23 @@ def _api_key() -> str:
     return key
 
 
+class QuickStatsApiError(RuntimeError):
+    """NASS가 HTTP 200 + error body를 반환 — 조용한 부분 누락 방지 위해 예외 승격.
+
+    as-is: log.warning + 빈 목록 반환 → 프로파일이 스킵돼도 소스 상태 success
+           (최신 주차 조용한 누락 — 2026-07-11 감사 중간#3)
+    to-be: 예외로 승격 → collect()의 _failures 경로 합류 → RuntimeError 전파
+    """
+
+
 def _get_count(params: dict) -> int:
     resp = fetch(API_COUNT, params={**params, "key": _api_key()})
     try:
         data = resp.json()
-    except ValueError:
-        log.error("QuickStats: invalid JSON from count API")
-        return 0
+    except ValueError as exc:
+        raise QuickStatsApiError("count API가 유효하지 않은 JSON 반환") from exc
+    if "error" in data:
+        raise QuickStatsApiError(f"count API error body: {data['error']}")
     return int(data.get("count", 0))
 
 
@@ -172,12 +182,10 @@ def _api_get(params: dict) -> list[dict]:
                  timeout=300)  # USER-CONFIG
     try:
         data = resp.json()
-    except ValueError:
-        log.error("QuickStats: invalid JSON from data API")
-        return []
+    except ValueError as exc:
+        raise QuickStatsApiError("data API가 유효하지 않은 JSON 반환") from exc
     if "error" in data:
-        log.warning("QuickStats API error: %s", data["error"])
-        return []
+        raise QuickStatsApiError(f"data API error body: {data['error']}")
     return data.get("data", [])
 
 
