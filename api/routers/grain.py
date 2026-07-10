@@ -180,13 +180,10 @@ async def grain_state_metrics(
 ) -> list[dict[str, Any]]:
     """주(state) 단위 지표 시계열 — 지도 시각화·유사 연도 비교용.
 
-    as-is: progress/condition 주별 데이터가 수집만 되고 REST 미노출 (지도분석 v2 ⓐ)
-    to-be: metric 이름으로 quickstats 주별 시계열 서빙 (predict-models map-data 원천)
+    as-is: quickstats.parquet만 조회 — USDM 가뭄 등 별도 parquet 지표 미서빙
+    to-be: normalized/structured 전체에서 metric 이름으로 주별 시계열 서빙 (2026-07-10)
     """
-    try:
-        df = backend.read_parquet("normalized/structured/quickstats.parquet")
-    except Exception:
-        return []
+    df = _load_all_grain(backend)
     if df.empty:
         return []
     # region 2글자 중 'US'는 전국 집계 — 주(state) 목록에서 제외
