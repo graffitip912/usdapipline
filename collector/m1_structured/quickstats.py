@@ -136,9 +136,12 @@ QUERY_PROFILES: list[dict] = [
         "metric_prefix": "soil",
         "commodities": ["SOIL"],
         "force_year_chunks": True,  # 지표당 ~27k행 단일 응답이 ReadTimeout → 연도 청크
-        # 413 대응: 응답 크기 축소를 위해 지표(short_desc)별 분할 조회
+        # 413 대응: 응답 크기 축소를 위해 지표(short_desc)별 분할 조회.
+        # as-is: "SOIL, MOISTURE, {depth} - PCT {cat}" — NASS 실제 형식과 불일치
+        #        → count 0 → 조용한 0행 (2026-07-11 발견, get_param_values로 실측)
+        # to-be: 실제 short_desc 형식 (PREVIOUS YEAR 변형 8종은 제외)
         "split_short_descs": [
-            f"SOIL, MOISTURE, {depth} - PCT {cat}"
+            f"SOIL, {depth} - MOISTURE, MEASURED IN PCT {cat}"
             for depth in ("TOPSOIL", "SUBSOIL")
             for cat in ("VERY SHORT", "SHORT", "ADEQUATE", "SURPLUS")
         ],
