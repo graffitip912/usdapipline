@@ -9,6 +9,7 @@ Sheet whitelist based on actual xlsx structure analysis (Jun 2026).
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -94,9 +95,26 @@ def collect(since: int = 2010, force: bool = False) -> None:
 
     if all_records:
         merged = pd.concat(all_records, ignore_index=True)
-        merged = validate_and_stamp(merged, SOURCE)
+        # 증분 쓰기 4원칙 (2026-07-11 사고: since=당해연도 주간 배치가 병합 없이
+        # 교체해 16,277→5,032행 축소 — quickstats/usdm과 동일 원칙 적용)
         out = norm_path("gtr.parquet")
-        merged.to_parquet(out, index=False, compression="zstd")
+        if out.exists():
+            try:
+                existing = pd.read_parquet(out)
+                if not existing.empty:
+                    merged = pd.concat([existing, merged], ignore_index=True)
+                    if "ingested_at" in merged.columns:
+                        merged["ingested_at"] = merged["ingested_at"].fillna(
+                            pd.Timestamp.now(tz="UTC"))
+            except Exception:
+                log.error("GTR: 기존 parquet 읽기 실패 — 쓰기 중단 (유실 방지)")
+                return
+        merged = merged.sort_values("report_date", kind="stable").drop_duplicates(
+            subset=["commodity", "obs_date", "metric", "region"], keep="last")
+        merged = validate_and_stamp(merged, SOURCE)
+        tmp = out.with_suffix(".parquet.tmp")
+        merged.to_parquet(tmp, index=False, compression="zstd")
+        os.replace(tmp, out)
         manifest.upsert(
             source=SOURCE,
             artifact_type="normalized_parquet",
