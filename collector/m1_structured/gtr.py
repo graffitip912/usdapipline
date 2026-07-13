@@ -267,10 +267,16 @@ def _parse_table2ab_futures(path: Path, since: int) -> pd.DataFrame:
     """
     try:
         df = pd.read_excel(path, sheet_name="Futures", header=None, skiprows=3)
-    except Exception:
-        log.warning("GTR Table2AB: 'Futures' sheet not found")
+    except Exception as exc:
+        # 모든 읽기 실패를 'not found'로 오표하지 않음 — 원인 보존 (리뷰 수리)
+        log.warning("GTR Table2AB Futures 시트 읽기 실패 (%s): %s",
+                    type(exc).__name__, exc)
         return pd.DataFrame()
     if df.shape[1] < 10:
+        # 컬럼 구조 개편 신호 — 조용한 빈 DF 금지 (freshness 게이트가 14일 후
+        # STALE로 잡긴 하나, 원인은 여기 로그가 말해줘야 함)
+        log.warning("GTR Table2AB Futures: 컬럼 %d개(<10) — 시트 구조 변경 의심, 파싱 스킵",
+                    df.shape[1])
         return pd.DataFrame()
 
     df[0] = pd.to_datetime(df[0], errors="coerce")
@@ -285,6 +291,8 @@ def _parse_table2ab_futures(path: Path, since: int) -> pd.DataFrame:
         (7, 8, "SOYBEAN", "CBOT"),
         (2, 1, "WHEAT", "KC-HRW"),
         (3, 1, "WHEAT", "MPLS-HRS"),
+        # SRW는 참조 전용·판정 미사용 — m7 엔진의 밀 판정 짝은 KC-HRW/MPLS-HRS만
+        # (SRW는 다른 기초자산이라 대체 금지, engine.py 상단 블록 참조)
         (5, 1, "WHEAT", "CBOT-SRW"),
     ]
     records = []
@@ -336,8 +344,10 @@ def _parse_table2ab(path: Path, since: int) -> pd.DataFrame:
     )
     df["region"] = df[2].astype(str).str.strip()
 
-    # 7/8 = GTR 자체 계산 산지/도착지-근월물 베이시스 (2026-07-13 추가 —
-    # 엔진 베이시스 재계산의 원천 대조 게이트에 사용)
+    # 7/8 = GTR 자체 계산 산지/도착지-근월물 베이시스 (2026-07-13 추가).
+    # 7(산지)은 전 노선, 8(도착지)은 corn/soybean만 M1 게이트가 재계산과
+    # 전수 대조. 밀 도착지 베이시스는 선물 짝이 원천 미확정(KC·시카고 모두
+    # 불일치 실측) — 문서 전용·판정 미사용
     price_metrics = {3: "origin_price", 4: "destination_price",
                      5: "price_spread", 7: "origin_future_basis",
                      8: "dest_future_basis"}
