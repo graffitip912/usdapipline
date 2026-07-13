@@ -230,8 +230,83 @@ def _parse_table1(path: Path, since: int) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Table 2AB – price spreads. Sheet: "Data"
 # Col A = date (sparse, forward-fill), Col B = commodity, Col C = route,
-# Cols D+ = prices (Origin, Destination, Spread, Basis, etc.)
+# Cols D+ = prices (Origin, Destination, Spread, [6 blank],
+#           Origin-Future basis, Dest-Future basis, ...)
+# Sheet: "Futures" — CBOT/KC/MPLS 근월물 주간 종가 + 계약월 (2026-07-13 추가)
 # ---------------------------------------------------------------------------
+
+# 계약월명 → 월 번호 (GTR 표기 실측: "July", "Sep", "Dec" 등)
+_CONTRACT_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "march": 3, "apr": 4, "april": 4,
+    "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7, "aug": 8,
+    "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _contract_yyyymm(month_name, obs_date) -> float | None:
+    """계약월명 + 관측일 → YYYYMM (float — GrainSchema value 채널에 적재).
+
+    연도 추론(결정론): 계약월 번호 >= 관측 월이면 당해, 아니면 익년.
+    (근월물은 항상 관측일 이후 최초 도래 월 — CME 3·5·7·9·12월 주기)
+    """
+    if not isinstance(month_name, str):
+        return None
+    m = _CONTRACT_MONTHS.get(month_name.strip().lower())
+    if m is None:
+        return None
+    year = obs_date.year if m >= obs_date.month else obs_date.year + 1
+    return float(year * 100 + m)
+
+
+def _parse_table2ab_futures(path: Path, since: int) -> pd.DataFrame:
+    """Futures 시트: 근월물 주간 종가 + 계약월.
+
+    거래소-클래스 짝은 파일 자체 베이시스 컬럼 역산으로 확정 (2026-07-13):
+    HRW 터미널(KS/Gulf)→KC, HRS 터미널(ND/Portland)→MPLS, 옥수수/대두→CBOT.
+    계약월은 GTR 발표 표기를 그대로 수집 (재해석 금지).
+    """
+    try:
+        df = pd.read_excel(path, sheet_name="Futures", header=None, skiprows=3)
+    except Exception:
+        log.warning("GTR Table2AB: 'Futures' sheet not found")
+        return pd.DataFrame()
+    if df.shape[1] < 10:
+        return pd.DataFrame()
+
+    df[0] = pd.to_datetime(df[0], errors="coerce")
+    df = df.dropna(subset=[0])
+    df = clip_dates(df, 0)
+    if since:
+        df = df[df[0].dt.year >= since]
+
+    # (가격 컬럼, 계약월 컬럼, commodity, region) — 헤더 행 실측 기준
+    specs = [
+        (6, 9, "CORN", "CBOT"),
+        (7, 8, "SOYBEAN", "CBOT"),
+        (2, 1, "WHEAT", "KC-HRW"),
+        (3, 1, "WHEAT", "MPLS-HRS"),
+        (5, 1, "WHEAT", "CBOT-SRW"),
+    ]
+    records = []
+    for _, row in df.iterrows():
+        obs = row[0]
+        for price_col, month_col, commodity, region in specs:
+            price = pd.to_numeric(row.get(price_col), errors="coerce")
+            if pd.isna(price):
+                continue
+            base = {
+                "obs_date": obs, "marketing_year": None,
+                "commodity": commodity, "region": region,
+                "source": SOURCE, "report_date": obs,
+            }
+            records.append({**base, "metric": "futures__nearby_price",
+                            "value": float(price), "unit": "$/bu"})
+            yyyymm = _contract_yyyymm(row.get(month_col), obs)
+            if yyyymm is not None:
+                records.append({**base, "metric": "futures__nearby_contract",
+                                "value": yyyymm, "unit": "yyyymm"})
+    return pd.DataFrame(records)
+
 
 def _parse_table2ab(path: Path, since: int) -> pd.DataFrame:
     try:
@@ -261,7 +336,11 @@ def _parse_table2ab(path: Path, since: int) -> pd.DataFrame:
     )
     df["region"] = df[2].astype(str).str.strip()
 
-    price_metrics = {3: "origin_price", 4: "destination_price", 5: "price_spread"}
+    # 7/8 = GTR 자체 계산 산지/도착지-근월물 베이시스 (2026-07-13 추가 —
+    # 엔진 베이시스 재계산의 원천 대조 게이트에 사용)
+    price_metrics = {3: "origin_price", 4: "destination_price",
+                     5: "price_spread", 7: "origin_future_basis",
+                     8: "dest_future_basis"}
     records = []
     for col_idx, metric_name in price_metrics.items():
         if col_idx >= df.shape[1]:
@@ -282,7 +361,10 @@ def _parse_table2ab(path: Path, since: int) -> pd.DataFrame:
             "report_date": sub[0],
         }))
 
-    return pd.concat(records, ignore_index=True) if records else pd.DataFrame()
+    data_df = pd.concat(records, ignore_index=True) if records else pd.DataFrame()
+    fut_df = _parse_table2ab_futures(path, since)
+    parts = [d for d in (data_df, fut_df) if not d.empty]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 # ---------------------------------------------------------------------------

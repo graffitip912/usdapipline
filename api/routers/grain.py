@@ -28,6 +28,7 @@ METRIC_CATEGORIES: dict[str, list[str]] = {
         "price_received",
         "price_spread__",
         "loan_rate",
+        "futures__",  # GTR 근월물 주간 종가·계약월 (2026-07-13 시장 구조 연동)
     ],
     "supply": [
         "total_supply",
