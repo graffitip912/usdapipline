@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -231,7 +231,7 @@ def _fetch_profile_commodity(
 
     all_rows: list[dict] = []
     year = since
-    current_year = datetime.utcnow().year
+    current_year = datetime.now(timezone.utc).year
     while year <= current_year:
         year_end = min(year + 4, current_year)
         chunk_params = {**params, "year__GE": str(year), "year__LE": str(year_end)}

@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -74,7 +74,7 @@ def _discover_latest_csv_url() -> str | None:
     max_consecutive_failures = 3
     consecutive_failures = 0
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for months_back in range(0, 18):
         year = now.year
         month = now.month - months_back

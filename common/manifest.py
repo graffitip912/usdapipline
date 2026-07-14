@@ -9,7 +9,7 @@ Status lifecycle:
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -117,7 +117,7 @@ def upsert(
                 "path": path_str,
                 "sha256": sha256,
                 "status": status,
-                "collected_at": datetime.utcnow().isoformat(),
+                "collected_at": datetime.now(timezone.utc).isoformat(),
                 "retry_count": retry_count if status in ("failed", "stale") else 0,
                 "error_message": error_message,
             }]
@@ -168,11 +168,11 @@ def record_failure(source: str, error_message: str = "") -> str:
             [{
                 "source": source,
                 "artifact_type": "collection_attempt",
-                "period": datetime.utcnow().strftime("%Y-%m-%d"),
+                "period": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "path": "",
                 "sha256": "",
                 "status": status,
-                "collected_at": datetime.utcnow().isoformat(),
+                "collected_at": datetime.now(timezone.utc).isoformat(),
                 "retry_count": retry_count,
                 "error_message": error_message[:500],
             }]
@@ -200,11 +200,11 @@ def record_skipped(source: str, reason: str = "") -> None:
             [{
                 "source": source,
                 "artifact_type": "collection_attempt",
-                "period": datetime.utcnow().strftime("%Y-%m-%d"),
+                "period": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                 "path": "",
                 "sha256": "",
                 "status": "skipped",
-                "collected_at": datetime.utcnow().isoformat(),
+                "collected_at": datetime.now(timezone.utc).isoformat(),
                 "retry_count": 0,
                 "error_message": reason[:500],
             }]

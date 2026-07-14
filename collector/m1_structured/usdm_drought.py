@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -49,7 +49,7 @@ METRICS = [
 def collect(since: int = 2010, force: bool = False) -> None:
     ensure_dirs()
     norm_file = norm_path("usdm_drought.parquet")
-    end = datetime.utcnow().strftime("%m/%d/%Y")
+    end = datetime.now(timezone.utc).strftime("%m/%d/%Y")
     start = f"1/1/{since}"
 
     records: list[dict] = []

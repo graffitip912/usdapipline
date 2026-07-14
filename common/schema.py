@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -32,7 +32,7 @@ class GrainRecord(BaseModel):
     unit: str
     source: str
     report_date: date
-    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def clip_dates(
 ) -> pd.DataFrame:
     """Remove rows where *col* falls outside [min_year, max_year]."""
     if max_year is None:
-        max_year = datetime.utcnow().year + 5
+        max_year = datetime.now(timezone.utc).year + 5
     df[col] = pd.to_datetime(df[col], errors="coerce")
     before = len(df)
     mask = df[col].notna() & (df[col].dt.year >= min_year) & (df[col].dt.year <= max_year)
@@ -78,7 +78,7 @@ def validate_and_stamp(df: pd.DataFrame, source: str) -> pd.DataFrame:
     """
     df = df.copy()
     if "ingested_at" not in df.columns:
-        df["ingested_at"] = pd.Timestamp.utcnow()
+        df["ingested_at"] = pd.Timestamp.now("UTC")
     if "source" not in df.columns:
         df["source"] = source
     for col in ("obs_date", "report_date", "ingested_at"):
@@ -129,7 +129,7 @@ def validate_with_report(
 
     df_copy = df.copy()
     if "ingested_at" not in df_copy.columns:
-        df_copy["ingested_at"] = pd.Timestamp.utcnow()
+        df_copy["ingested_at"] = pd.Timestamp.now("UTC")
     if "source" not in df_copy.columns:
         df_copy["source"] = source
     for col in ("obs_date", "report_date", "ingested_at"):

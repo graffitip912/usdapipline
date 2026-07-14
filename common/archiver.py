@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ def archive_old_images(cutoff_days: int | None = None) -> dict[str, Any]:
         cutoff_days = ARCHIVE_CUTOFF_DAYS
 
     backend = get_backend()
-    cutoff_date = datetime.utcnow() - timedelta(days=cutoff_days)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=cutoff_days)
     cutoff_str = cutoff_date.strftime("%Y-%m-%d")
 
     images_dir = Path(backend.resolve_path("assets/wwcb/images"))

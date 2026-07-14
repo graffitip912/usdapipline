@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -242,7 +242,7 @@ def extract_images_from_pdf(pdf_path: Path, force: bool = False) -> list[dict]:
                 "filter_stage": filter_result.stage,
                 "filter_reason": filter_result.reason,
                 "phash": img_hash,
-                "extracted_at": datetime.utcnow().isoformat(),
+                "extracted_at": datetime.now(timezone.utc).isoformat(),
             }
             extracted.append(meta)
             log.debug(
@@ -294,7 +294,7 @@ def _save_summary(all_results: dict[str, list[dict]]) -> Path:
     meta_dir.mkdir(parents=True, exist_ok=True)
 
     summary = {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_pdfs": len(all_results),
         "total_images": sum(len(v) for v in all_results.values()),
         "by_category": {},

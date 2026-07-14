@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -137,7 +137,7 @@ def _discover_commodity_codes(api_key: str) -> dict[str, str]:
 
 
 def _current_market_year() -> int:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return now.year if now.month >= 6 else now.year - 1
 
 

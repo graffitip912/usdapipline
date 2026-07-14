@@ -12,7 +12,7 @@ used (host outage 2026-07, and ESMIS is the archive of record).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from common import esmis, manifest
@@ -35,7 +35,7 @@ def collect(since: int = 2010, force: bool = False) -> None:
 
     _download_current(raw_dir, force)
 
-    if since < datetime.utcnow().year:
+    if since < datetime.now(timezone.utc).year:
         # USER-CONFIG: archive depth in weeks (ESMIS retains full history;
         # `since` earlier than ~1 year is capped by this window)
         _download_recent_archive(raw_dir, weeks_back=52, force=force)
@@ -65,7 +65,7 @@ def _download_recent_archive(raw_dir: Path, weeks_back: int, force: bool) -> Non
     so each week probes Tue -> Wed -> Mon. Stops after
     MAX_CONSECUTIVE_MISSES consecutive missing weeks.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     tuesday = now - timedelta(days=(now.weekday() - 1) % 7)
     downloaded = 0
     misses = 0

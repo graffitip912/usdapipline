@@ -26,10 +26,10 @@ dependencies = [
 [project.optional-dependencies]
 # USER-CONFIG: pip install -e ".[ml]" for Hugging Face model inference
 ml = [
-    "torch>=2.0",
-    "transformers>=4.40",
-    "datasets>=2.18",
-    "accelerate>=0.28",
+    "torch>=2.0,<3",
+    "transformers>=4.40,<6",
+    "datasets>=2.18,<3",
+    "accelerate>=0.28,<1",
 ]
 
 [tool.setuptools.packages.find]

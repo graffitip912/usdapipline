@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -24,7 +24,7 @@ _VERIFICATION_DIR = "meta/verification"
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _uuid() -> str:

@@ -7,6 +7,7 @@ and scheduling in a single process.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -26,11 +27,9 @@ from common.storage import ensure_dirs
 
 log = logging.getLogger(__name__)
 
-# USER-CONFIG: allowed CORS origins
-ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3020",
-]
+# USER-CONFIG: allowed CORS origins (override via CORS_ALLOWED_ORIGINS env var)
+_cors_origins_str = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3020")
+ALLOWED_ORIGINS = [o.strip() for o in _cors_origins_str.split(",")]
 
 
 @asynccontextmanager
