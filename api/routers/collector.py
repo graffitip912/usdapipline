@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from collector.run import MANIFEST_SOURCES, SOURCES, run_source
 from common import manifest
@@ -80,7 +80,7 @@ async def run_collector(
 ) -> dict[str, str]:
     """Trigger a collection run for a specific source (runs in background)."""
     if source not in SOURCES:
-        return {"source": source, "status": "error", "message": f"Unknown source: {source}"}
+        raise HTTPException(status_code=404, detail=f"Unknown source: {source}")
     background_tasks.add_task(run_source, source, since, force)
     return {"source": source, "status": "started", "message": f"Collection started for {source}"}
 
