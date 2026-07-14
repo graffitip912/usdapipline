@@ -345,9 +345,10 @@ def _parse_table2ab(path: Path, since: int) -> pd.DataFrame:
     df["region"] = df[2].astype(str).str.strip()
 
     # 7/8 = GTR 자체 계산 산지/도착지-근월물 베이시스 (2026-07-13 추가).
-    # 7(산지)은 전 노선, 8(도착지)은 corn/soybean만 M1 게이트가 재계산과
-    # 전수 대조. 밀 도착지 베이시스는 선물 짝이 원천 미확정(KC·시카고 모두
-    # 불일치 실측) — 문서 전용·판정 미사용
+    # 7(산지)은 전 노선 M1 게이트 전수 대조. 8(도착지)은 CBOT(corn/soybean)만
+    # 게이트 단언 — 실측: KS–Gulf(HRW) 도착지 베이시스는 GTR이 KC 아닌 타 선물
+    # (걸프 연질밀 시카고 추정)로 계산해 불일치(diff 0.33). 따라서 밀 도착지
+    # 베이시스는 문서 전용·판정 미사용 (선언-구현 드리프트 아님)
     price_metrics = {3: "origin_price", 4: "destination_price",
                      5: "price_spread", 7: "origin_future_basis",
                      8: "dest_future_basis"}
