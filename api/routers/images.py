@@ -71,6 +71,7 @@ async def list_images(
             "pdf_date": img.get("pdf_date"),
             "category": img.get("category"),
             "region": img.get("region"),
+            "toc_section": img.get("toc_section", ""),
             "page_text": (img.get("page_text") or "")[:200],
             "ocr_text": (img.get("ocr_text") or "")[:200],
         }
