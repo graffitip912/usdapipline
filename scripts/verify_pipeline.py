@@ -123,9 +123,17 @@ def check_run_button() -> None:
         detail = "1단계에서 즉시 확인"
     check(f"{src} 수집 체인 상태 변화 관찰", changed, detail)
 
-    # semantic error contract: unknown source must be reported as error
-    bad = requests.post(f"{API}/api/collector/run/USDA_WASDE", timeout=15).json()
-    check("잘못된 소스명 -> status=='error' 반환", bad.get("status") == "error", str(bad))
+    # semantic error contract: unknown source must be 404 + detail
+    # as-is: 200 {"status":"error"} 기대 — a8fb4e4(LOW 수리)가 REST 시맨틱에 맞게
+    #        404 HTTPException으로 변경했으나 게이트 미갱신 (선언-구현 드리프트)
+    # to-be: HTTP 404 + detail에 'Unknown source' 단언 (2026-07-16)
+    bad_resp = requests.post(f"{API}/api/collector/run/USDA_WASDE", timeout=15)
+    bad = bad_resp.json()
+    check(
+        "잘못된 소스명 -> 404 + detail='Unknown source' 반환",
+        bad_resp.status_code == 404 and "Unknown source" in str(bad.get("detail", "")),
+        f"HTTP {bad_resp.status_code} {bad}",
+    )
 
 
 # ---------------------------------------------------------------------------
